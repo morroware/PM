@@ -164,6 +164,21 @@ function pm_validate_label_ids_for_project(array $labelIds, int $projectId): arr
     return $clean;
 }
 
+function pm_validate_assignee_ids(array $assigneeIds): array {
+    $clean = array_values(array_unique(array_map('intval', $assigneeIds)));
+    if (!$clean) return [];
+    $ph = implode(',', array_fill(0, count($clean), '?'));
+    $rows = pm_fetch_all("SELECT id FROM users WHERE id IN ($ph)", $clean);
+    $ok = array_map(fn($r) => (int)$r['id'], $rows);
+    sort($ok);
+    $want = $clean;
+    sort($want);
+    if ($ok !== $want) {
+        pm_error('One or more assignees are invalid', 409);
+    }
+    return $clean;
+}
+
 function pm_create_task(): void {
     $title = trim((string)pm_param('title', ''));
     if ($title === '') pm_error('Title required');
@@ -179,8 +194,10 @@ function pm_create_task(): void {
 
     $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [$project]);
     if (!$proj) pm_error('Invalid project');
+    if (!empty($proj['archived'])) pm_error('Cannot create tasks in an archived project', 409);
 
     $labels = pm_validate_label_ids_for_project($labels, $project);
+    $assignees = pm_validate_assignee_ids($assignees);
 
     $prefix = $proj['key_prefix'] ?: pm_config()['project_key'];
 
@@ -219,6 +236,7 @@ function pm_create_task(): void {
     }
 
     try {
+        pm_db()->beginTransaction();
         foreach ($labels as $lid) {
             pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$tid, (int)$lid]);
         }
@@ -226,9 +244,12 @@ function pm_create_task(): void {
             pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$tid, (int)$uid]);
         }
         pm_log_activity(pm_current_user_id(), $tid, 'created', $title);
+        pm_db()->commit();
     } catch (Throwable $e) {
+        if (pm_db()->inTransaction()) pm_db()->rollBack();
+        pm_exec('DELETE FROM tasks WHERE id = ?', [$tid]);
         error_log('pm_create_task metadata failed: ' . $e->getMessage());
-        pm_error('Task was created but metadata could not be attached.', 500);
+        pm_error('Failed to create task metadata.', 500);
     }
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$tid]);
     pm_slack_notify_task_event($t, $proj, 'task_created', 'created this task');
@@ -266,8 +287,12 @@ function pm_update_task(int $id): void {
         $params[] = (int)$body['priority'];
     }
     if (array_key_exists('project', $body)) {
+        $nextProjectId = (int)$body['project'];
+        $proj = pm_fetch_one('SELECT id, archived FROM projects WHERE id = ?', [$nextProjectId]);
+        if (!$proj) pm_error('Invalid project', 409);
+        if (!empty($proj['archived'])) pm_error('Cannot move tasks into an archived project', 409);
         $fields[] = 'project_id = ?';
-        $params[] = (int)$body['project'];
+        $params[] = $nextProjectId;
     }
     if ($fields) {
         $params[] = $id;
@@ -284,9 +309,9 @@ function pm_update_task(int $id): void {
     }
     $newlyAssigned = [];
     if (array_key_exists('assignees', $body) && is_array($body['assignees'])) {
+        $validAssignees = pm_validate_assignee_ids($body['assignees']);
         pm_exec('DELETE FROM task_assignees WHERE task_id = ?', [$id]);
-        foreach ($body['assignees'] as $uid) {
-            $uid = (int)$uid;
+        foreach ($validAssignees as $uid) {
             pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$id, $uid]);
             if (!in_array($uid, $prevAssignees, true)) $newlyAssigned[] = $uid;
         }
