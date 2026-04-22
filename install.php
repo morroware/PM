@@ -119,15 +119,22 @@ function pm_install_schema(): void {
             name VARCHAR(120) NOT NULL,
             color VARCHAR(16) NOT NULL,
             key_prefix VARCHAR(8) NOT NULL DEFAULT 'CTT',
+            description TEXT NULL,
+            slack_channel VARCHAR(120) NULL,
             sort_order INT NOT NULL DEFAULT 0,
             archived TINYINT(1) NOT NULL DEFAULT 0,
+            archived_at TIMESTAMP NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
         "CREATE TABLE IF NOT EXISTS labels (
             id INT AUTO_INCREMENT PRIMARY KEY,
             name VARCHAR(80) NOT NULL,
-            color VARCHAR(16) NOT NULL
+            color VARCHAR(16) NOT NULL,
+            project_id INT NULL,
+            archived TINYINT(1) NOT NULL DEFAULT 0,
+            INDEX idx_lbl_project (project_id),
+            CONSTRAINT fk_lbl_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
         "CREATE TABLE IF NOT EXISTS tasks (
@@ -140,11 +147,13 @@ function pm_install_schema(): void {
             priority TINYINT NOT NULL DEFAULT 2,
             due DATE NULL,
             estimate VARCHAR(32) NULL,
+            recurring_rule_id INT NULL,
             created_by INT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_status (status),
             INDEX idx_project (project_id),
+            INDEX idx_recurring (recurring_rule_id),
             CONSTRAINT fk_tasks_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
@@ -195,11 +204,103 @@ function pm_install_schema(): void {
             INDEX idx_act_user (user_id),
             INDEX idx_act_task (task_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            name VARCHAR(64) PRIMARY KEY,
+            value MEDIUMTEXT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+
+        "CREATE TABLE IF NOT EXISTS recurring_rules (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            project_id INT NOT NULL,
+            title VARCHAR(500) NOT NULL,
+            description TEXT NULL,
+            priority TINYINT NOT NULL DEFAULT 2,
+            estimate VARCHAR(32) NULL,
+            assignees TEXT NULL,
+            labels TEXT NULL,
+            cadence VARCHAR(16) NOT NULL DEFAULT 'weekly',
+            interval_n INT NOT NULL DEFAULT 1,
+            weekday TINYINT NULL,
+            month_day TINYINT NULL,
+            month_of_year TINYINT NULL,
+            next_run DATE NULL,
+            ends_on DATE NULL,
+            occurrences_left INT NULL,
+            paused TINYINT(1) NOT NULL DEFAULT 0,
+            last_task_id INT NULL,
+            created_by INT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_rr_project (project_id),
+            INDEX idx_rr_next (next_run),
+            CONSTRAINT fk_rr_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     ];
     foreach ($sql as $q) $pdo->exec($q);
 
     // Re-run safe migrations for installs created before this version.
     pm_migrate_comment_user_nullable();
+    pm_migrate_add_column_if_missing('projects', 'description',   'TEXT NULL');
+    pm_migrate_add_column_if_missing('projects', 'slack_channel', "VARCHAR(120) NULL");
+    pm_migrate_add_column_if_missing('projects', 'archived_at',   'TIMESTAMP NULL');
+    pm_migrate_add_column_if_missing('labels',   'project_id',    'INT NULL');
+    pm_migrate_add_column_if_missing('labels',   'archived',      'TINYINT(1) NOT NULL DEFAULT 0');
+    pm_migrate_add_column_if_missing('tasks',    'recurring_rule_id', 'INT NULL');
+    pm_migrate_add_index_if_missing('labels', 'idx_lbl_project', '(project_id)');
+    pm_migrate_add_index_if_missing('tasks',  'idx_recurring',   '(recurring_rule_id)');
+    pm_migrate_add_fk_if_missing(
+        'labels', 'fk_lbl_project',
+        'FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE'
+    );
+}
+
+// Add a column to $table if it's not already there. Swallows errors so that
+// a partial failure (permissions, already-renamed column) doesn't abort install.
+function pm_migrate_add_column_if_missing(string $table, string $column, string $spec): void {
+    try {
+        $row = pm_fetch_one(
+            "SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME   = ?
+               AND COLUMN_NAME  = ?",
+            [$table, $column]
+        );
+        if ($row && (int)$row['c'] === 0) {
+            pm_db()->exec("ALTER TABLE `$table` ADD COLUMN `$column` $spec");
+        }
+    } catch (Throwable $_) { /* best effort */ }
+}
+
+function pm_migrate_add_index_if_missing(string $table, string $index, string $spec): void {
+    try {
+        $row = pm_fetch_one(
+            "SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.STATISTICS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME   = ?
+               AND INDEX_NAME   = ?",
+            [$table, $index]
+        );
+        if ($row && (int)$row['c'] === 0) {
+            pm_db()->exec("ALTER TABLE `$table` ADD INDEX `$index` $spec");
+        }
+    } catch (Throwable $_) { /* best effort */ }
+}
+
+function pm_migrate_add_fk_if_missing(string $table, string $constraint, string $spec): void {
+    try {
+        $row = pm_fetch_one(
+            "SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME   = ?
+               AND CONSTRAINT_NAME = ?",
+            [$table, $constraint]
+        );
+        if ($row && (int)$row['c'] === 0) {
+            pm_db()->exec("ALTER TABLE `$table` ADD CONSTRAINT `$constraint` $spec");
+        }
+    } catch (Throwable $_) { /* best effort */ }
 }
 
 function pm_migrate_comment_user_nullable(): void {

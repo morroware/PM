@@ -6,14 +6,45 @@ pm_require_auth();
 $method = pm_method();
 $id = pm_int_param('id');
 
+// Shape a project row for API responses. Keeps optional columns (description,
+// slack_channel, archived_at) safely optional so installs that haven't re-run
+// install.php still serialize cleanly.
+function pm_project_shape(array $r): array {
+    return [
+        'id'            => (int)$r['id'],
+        'name'          => $r['name'],
+        'color'         => $r['color'],
+        'key_prefix'    => $r['key_prefix'],
+        'description'   => $r['description']   ?? null,
+        'slack_channel' => $r['slack_channel'] ?? null,
+        'archived'      => !empty($r['archived']),
+        'archived_at'   => $r['archived_at']   ?? null,
+    ];
+}
+
 if ($method === 'GET' && $id === null) {
-    $rows = pm_fetch_all('SELECT id, name, color, key_prefix, sort_order, archived FROM projects WHERE archived = 0 ORDER BY sort_order, id');
-    pm_json(['projects' => array_map(fn($r) => [
-        'id'         => (int)$r['id'],
-        'name'       => $r['name'],
-        'color'      => $r['color'],
-        'key_prefix' => $r['key_prefix'],
-    ], $rows)]);
+    // By default we exclude archived projects from the main list to keep the
+    // sidebar uncluttered. Admin Settings passes include_archived=1.
+    $includeArchived = !empty($_GET['include_archived']);
+    $sql = 'SELECT id, name, color, key_prefix, description, slack_channel, sort_order, archived, archived_at
+            FROM projects'
+         . ($includeArchived ? '' : ' WHERE archived = 0')
+         . ' ORDER BY archived, sort_order, id';
+    $rows = pm_fetch_all($sql);
+    pm_json(['projects' => array_map('pm_project_shape', $rows)]);
+}
+
+if ($method === 'GET' && $id !== null) {
+    $row = pm_fetch_one(
+        'SELECT id, name, color, key_prefix, description, slack_channel, sort_order, archived, archived_at
+         FROM projects WHERE id = ?',
+        [$id]
+    );
+    if (!$row) pm_error('Not found', 404);
+    $taskCount = pm_fetch_one('SELECT COUNT(*) AS c FROM tasks WHERE project_id = ?', [$id]);
+    $out = pm_project_shape($row);
+    $out['task_count'] = (int)($taskCount['c'] ?? 0);
+    pm_json(['project' => $out]);
 }
 
 if ($method === 'POST' && $id === null) {
@@ -21,38 +52,98 @@ if ($method === 'POST' && $id === null) {
     $name   = trim((string)pm_param('name', ''));
     $color  = (string)pm_param('color', '#3B82F6');
     $prefix = strtoupper(trim((string)pm_param('key_prefix', 'PRJ')));
+    $desc   = pm_param('description');
+    $slack  = pm_param('slack_channel');
     if ($name === '') pm_error('Name required');
     if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) pm_error('Invalid color');
     if ($prefix === '' || !preg_match('/^[A-Z0-9]{1,8}$/', $prefix)) pm_error('Invalid key_prefix');
-    pm_exec('INSERT INTO projects (name, color, key_prefix) VALUES (?,?,?)',
-        [$name, $color, $prefix]);
+    if ($slack !== null && $slack !== '' && !preg_match('/^[#@]?[A-Za-z0-9\-_.]{1,80}$/', (string)$slack)) {
+        pm_error('Invalid Slack channel (use #channel or channel-id)');
+    }
+    $sortRow = pm_fetch_one('SELECT COALESCE(MAX(sort_order),0) AS m FROM projects');
+    $sort = ((int)($sortRow['m'] ?? 0)) + 1;
+    pm_exec(
+        'INSERT INTO projects (name, color, key_prefix, description, slack_channel, sort_order) VALUES (?,?,?,?,?,?)',
+        [$name, $color, $prefix, $desc ?: null, $slack ?: null, $sort]
+    );
     $nid = pm_last_id();
-    pm_json(['project' => [
-        'id' => $nid, 'name' => $name, 'color' => $color, 'key_prefix' => $prefix
-    ]]);
+    pm_log_activity_maybe(pm_current_user_id(), null, 'project_created', $name);
+    $row = pm_fetch_one(
+        'SELECT id, name, color, key_prefix, description, slack_channel, sort_order, archived, archived_at
+         FROM projects WHERE id = ?', [$nid]
+    );
+    pm_json(['project' => pm_project_shape($row)]);
 }
 
 if ($method === 'PATCH' && $id !== null) {
     pm_require_admin();
     $body = pm_body();
     $f = []; $p = [];
-    if (isset($body['name']))   { $f[]='name = ?';   $p[]=trim((string)$body['name']); }
+    if (isset($body['name']))   {
+        $n = trim((string)$body['name']);
+        if ($n === '') pm_error('Name cannot be empty');
+        $f[]='name = ?';   $p[]=$n;
+    }
     if (isset($body['color']))  {
         $c = (string)$body['color'];
         if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $c)) pm_error('Invalid color');
         $f[]='color = ?';  $p[]=$c;
     }
-    if (isset($body['archived'])){$f[]='archived = ?'; $p[]=!empty($body['archived']) ? 1 : 0; }
+    if (isset($body['key_prefix'])) {
+        $pref = strtoupper(trim((string)$body['key_prefix']));
+        if (!preg_match('/^[A-Z0-9]{1,8}$/', $pref)) pm_error('Invalid key_prefix');
+        $f[]='key_prefix = ?'; $p[]=$pref;
+    }
+    if (array_key_exists('description', $body)) {
+        $d = $body['description'];
+        $f[]='description = ?'; $p[]=$d === '' ? null : $d;
+    }
+    if (array_key_exists('slack_channel', $body)) {
+        $s = $body['slack_channel'];
+        if ($s !== null && $s !== '' && !preg_match('/^[#@]?[A-Za-z0-9\-_.]{1,80}$/', (string)$s)) {
+            pm_error('Invalid Slack channel (use #channel or channel-id)');
+        }
+        $f[]='slack_channel = ?'; $p[]=$s === '' ? null : $s;
+    }
+    if (array_key_exists('sort_order', $body)) {
+        $f[]='sort_order = ?'; $p[]=(int)$body['sort_order'];
+    }
+    if (array_key_exists('archived', $body)) {
+        $archived = !empty($body['archived']) ? 1 : 0;
+        $f[]='archived = ?';    $p[]=$archived;
+        $f[]='archived_at = ?'; $p[]=$archived ? date('Y-m-d H:i:s') : null;
+    }
     if (!$f) pm_error('Nothing to update');
     $p[] = $id;
     pm_exec('UPDATE projects SET ' . implode(',', $f) . ' WHERE id = ?', $p);
-    pm_json(['ok' => true]);
+    $row = pm_fetch_one(
+        'SELECT id, name, color, key_prefix, description, slack_channel, sort_order, archived, archived_at
+         FROM projects WHERE id = ?', [$id]
+    );
+    if (!$row) pm_error('Not found', 404);
+    if (array_key_exists('archived', $body)) {
+        pm_log_activity_maybe(pm_current_user_id(), null,
+            !empty($body['archived']) ? 'project_archived' : 'project_unarchived',
+            $row['name']);
+    }
+    pm_json(['project' => pm_project_shape($row)]);
 }
 
 if ($method === 'DELETE' && $id !== null) {
     pm_require_admin();
+    $row = pm_fetch_one('SELECT name FROM projects WHERE id = ?', [$id]);
     pm_exec('DELETE FROM projects WHERE id = ?', [$id]);
+    if ($row) pm_log_activity_maybe(pm_current_user_id(), null, 'project_deleted', $row['name']);
     pm_json(['ok' => true]);
 }
 
 pm_error('Method not allowed', 405);
+
+// Activity logger that never blocks the request if the activity table has
+// some structural mismatch. Matches the shape used in tasks.php.
+function pm_log_activity_maybe(?int $uid, ?int $taskId, string $action, ?string $detail = null): void {
+    try {
+        pm_exec('INSERT INTO activity (user_id, task_id, action, detail) VALUES (?,?,?,?)',
+            [$uid, $taskId, $action, $detail]);
+    } catch (Throwable $_) { /* best effort */ }
+}

@@ -63,10 +63,45 @@ const API = {
   listComments(taskId)      { return this.get(`tasks.php?id=${taskId}&comments=1`); },
   addComment(taskId, body)  { return this.post(`tasks.php?id=${taskId}&comments=1`, { body }); },
 
+  // ---- projects ----
+  listProjects(opts = {})   {
+    const q = opts.includeArchived ? '?include_archived=1' : '';
+    return this.get('projects.php' + q);
+  },
+  getProject(id)            { return this.get(`projects.php?id=${id}`); },
+  createProject(data)       { return this.post('projects.php', data); },
+  updateProject(id, patch)  { return this.patch(`projects.php?id=${id}`, patch); },
+  deleteProject(id)         { return this.del(`projects.php?id=${id}`); },
+
+  // ---- labels ----
+  listLabels(opts = {})     {
+    const parts = [];
+    if (opts.includeArchived) parts.push('include_archived=1');
+    if (opts.projectId != null) parts.push('project_id=' + opts.projectId);
+    return this.get('labels.php' + (parts.length ? '?' + parts.join('&') : ''));
+  },
+  createLabel(data)         { return this.post('labels.php', data); },
+  updateLabel(id, patch)    { return this.patch(`labels.php?id=${id}`, patch); },
+  deleteLabel(id)           { return this.del(`labels.php?id=${id}`); },
+
+  // ---- slack integration ----
+  getSlack()                { return this.get('slack.php'); },
+  updateSlack(data)         { return this.post('slack.php?action=save', data); },
+  testSlack(channel)        { return this.post('slack.php?action=test', { channel }); },
+
+  // ---- recurring rules ----
+  listRecurring()           { return this.get('recurring.php'); },
+  createRecurring(data)     { return this.post('recurring.php', data); },
+  updateRecurring(id, data) { return this.patch(`recurring.php?id=${id}`, data); },
+  deleteRecurring(id)       { return this.del(`recurring.php?id=${id}`); },
+
+  // ---- users (admin) ----
+  updateUser(id, patch)     { return this.patch(`users.php?id=${id}`, patch); },
+  deleteUser(id)            { return this.del(`users.php?id=${id}`); },
+
   // ---- misc ----
   listActivity()            { return this.get('activity.php'); },
   listUsers()               { return this.get('users.php'); },
-  listProjects()            { return this.get('projects.php'); },
 };
 
 window.API = API;
