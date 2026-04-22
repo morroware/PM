@@ -92,12 +92,27 @@
   // Exposed so view modules (e.g. task drawer when a comment is posted) can
   // nudge the feed without reaching into app.js internals.
   window.pmRefreshActivity = () => refreshActivity();
+  window.pmCreateLabelFromPicker = (name, projectId) => createLabelFromPicker(name, projectId);
 
   // ----- actions -----
   async function refreshTasks() {
     const r = await API.listTasks();
     state.tasks = r.tasks;
     renderApp();
+  }
+  async function refreshLabels(opts = {}) {
+    const r = await API.listLabels(opts);
+    state.labels = r.labels || [];
+    renderApp();
+    return state.labels;
+  }
+  async function createLabelFromPicker(name, projectId = null) {
+    if (!state.me?.is_admin) throw new Error('Only admins can create labels');
+    const payload = { name, color: 'slate' };
+    if (projectId != null) payload.project_id = projectId;
+    const r = await API.createLabel(payload);
+    await refreshLabels();
+    return r.label;
   }
   async function updateTask(id, patch) {
     const r = await API.updateTask(id, patch);
@@ -139,6 +154,21 @@
     renderApp();
     refreshActivity();
     return r.task;
+  }
+  async function bulkUpdateLabels(taskIds, labelIds, mode) {
+    const ids = [...new Set((taskIds || []).map(Number).filter(Boolean))];
+    const lids = [...new Set((labelIds || []).map(Number).filter(Boolean))];
+    if (!ids.length || !lids.length) return;
+    for (const id of ids) {
+      const task = state.tasks.find(t => t.id === id);
+      if (!task) continue;
+      const next = new Set(task.labels || []);
+      if (mode === 'add') lids.forEach(lid => next.add(lid));
+      if (mode === 'remove') lids.forEach(lid => next.delete(lid));
+      await API.updateTask(id, { labels: [...next] });
+    }
+    await refreshTasks();
+    toast(`Updated labels on ${ids.length} task${ids.length === 1 ? '' : 's'}`, 'success');
   }
 
   // ----- filter logic -----
@@ -318,6 +348,7 @@
       },
       onMoveTask: (id, s) => moveTask(id, s),
       onToggleStatus: id => toggleStatus(id),
+      onBulkLabels: bulkUpdateLabels,
       onToggleSubtask: toggleSubtask,
       onNavigate: (v, projectId) => {
         state.view = v;
@@ -459,7 +490,7 @@
             state.filterLabels = [...set];
             renderApp();
           },
-          close, { keepOpen: true },
+          close, { keepOpen: true, scopeProjectId: state.filterProject },
         ));
       });
       bar.appendChild(lblBtn);
@@ -560,7 +591,11 @@
       lblBtn.addEventListener('click', () => openPopover(lblBtn, ({close}) => labelPickerContent(form.labels, lid => {
         const set = new Set(form.labels); set.has(lid) ? set.delete(lid) : set.add(lid);
         form.labels = [...set]; redraw();
-      }, close, { keepOpen: true })));
+      }, close, {
+        keepOpen: true,
+        scopeProjectId: form.project || null,
+        onCreateLabel: createLabelFromPicker,
+      })));
       body.appendChild(lblBtn);
 
       modal.appendChild(body);
@@ -703,10 +738,14 @@
     const colors = ['#3B82F6','#A855F7','#F59E0B','#22C55E','#EC4899','#06B6D4','#EF4444','#8B5CF6','#64748B'];
     const model = {
       includeArchived: true,
+      includeArchivedLabels: true,
       saving: false,
       loading: true,
+      labelsLoading: true,
       err: '',
+      labelErr: '',
       projects: [],
+      labels: [],
       projectDetails: {},
       form: {
         id: null,
@@ -715,6 +754,12 @@
         color: colors[0],
         description: '',
         slack_channel: '',
+      },
+      labelForm: {
+        id: null,
+        name: '',
+        color: 'slate',
+        project_id: '',
       },
     };
 
@@ -744,6 +789,17 @@
       const d = model.projectDetails[project.id];
       return d ? `${d.task_count || 0} tasks` : '…';
     }
+    function scopeLabel(l) {
+      if (l.project_id == null) return 'Global';
+      return projectById(l.project_id)?.name || `Project #${l.project_id}`;
+    }
+    function resetLabelForm(l = null) {
+      model.labelErr = '';
+      model.labelForm.id = l?.id ?? null;
+      model.labelForm.name = l?.name ?? '';
+      model.labelForm.color = l?.color ?? 'slate';
+      model.labelForm.project_id = l?.project_id == null ? '' : String(l.project_id);
+    }
 
     async function refreshProjects() {
       model.loading = true;
@@ -764,6 +820,19 @@
           redraw();
         }).catch(() => {});
       }
+    }
+    async function refreshLabelsAdmin() {
+      model.labelsLoading = true;
+      redraw();
+      try {
+        const r = await API.listLabels({ includeArchived: model.includeArchivedLabels });
+        model.labels = r.labels || [];
+      } catch (e) {
+        model.labelErr = e.message || 'Failed to load labels';
+      } finally {
+        model.labelsLoading = false;
+      }
+      redraw();
     }
 
     async function saveProject() {
@@ -836,6 +905,75 @@
       await refreshProjects();
       renderApp();
       toast('Project deleted', 'success');
+    }
+    async function saveLabel() {
+      const payload = {
+        name: model.labelForm.name.trim(),
+        color: model.labelForm.color,
+        project_id: model.labelForm.project_id === '' ? null : Number(model.labelForm.project_id),
+      };
+      if (!payload.name) { model.labelErr = 'Label name is required'; redraw(); return; }
+      model.saving = true;
+      model.labelErr = '';
+      redraw();
+      try {
+        if (model.labelForm.id) await API.updateLabel(model.labelForm.id, payload);
+        else await API.createLabel(payload);
+        resetLabelForm(null);
+        await refreshLabelsAdmin();
+        await refreshLabels();
+        toast(model.labelForm.id ? 'Label updated' : 'Label created', 'success');
+      } catch (e) {
+        model.labelErr = e.message || 'Save failed';
+      } finally {
+        model.saving = false;
+        redraw();
+      }
+    }
+    async function archiveLabel(label, archived) {
+      try {
+        await API.updateLabel(label.id, { archived });
+        await refreshLabelsAdmin();
+        await refreshLabels();
+        toast(`Label ${archived ? 'archived' : 'restored'}`, 'success');
+      } catch (e) {
+        toast(e.message || 'Label update failed', 'error');
+      }
+    }
+    async function deleteLabel(label) {
+      if (!confirm(`Delete label "${label.name}" permanently?`)) return;
+      try { await API.deleteLabel(label.id, false); }
+      catch (e) {
+        if (e.status === 409) {
+          toast(e.body?.error || 'Label is in use. Archive or merge instead.', 'error');
+          return;
+        }
+        toast(e.message || 'Delete failed', 'error');
+        return;
+      }
+      await refreshLabelsAdmin();
+      await refreshLabels();
+      toast('Label deleted', 'success');
+    }
+    async function mergeLabel(source) {
+      const siblings = model.labels.filter(l => l.id !== source.id && l.project_id == source.project_id && !l.archived);
+      if (!siblings.length) {
+        toast('No compatible label available in this scope to merge into', 'error');
+        return;
+      }
+      const options = siblings.map(l => `${l.id}: ${l.name}`).join('\n');
+      const raw = prompt(`Merge "${source.name}" into which label id?\n${options}`);
+      if (!raw) return;
+      const targetId = Number(raw);
+      if (!targetId) return;
+      try {
+        await API.post(`labels.php?id=${source.id}&action=merge&target_id=${targetId}`, {});
+        await refreshLabelsAdmin();
+        await refreshLabels();
+        toast('Labels merged', 'success');
+      } catch (e) {
+        toast(e.message || 'Merge failed', 'error');
+      }
     }
 
     function redraw() {
@@ -928,9 +1066,86 @@
       }
       if (!model.projects.length) list.appendChild(h('div', { class: 'empty' }, 'No projects found.'));
       body.appendChild(list);
+
+      body.appendChild(h('div', { class: 'settings-section-head', style: { marginTop: '20px' } },
+        h('div', null,
+          h('h3', null, 'Labels'),
+          h('div', { class: 'sub' }, 'Manage label taxonomy with project or global scope, usage-aware guardrails, and merge controls.'),
+        ),
+        h('label', { class: 'check-row', style: { whiteSpace: 'nowrap' } },
+          h('input', {
+            type: 'checkbox',
+            checked: model.includeArchivedLabels,
+            onChange: e => { model.includeArchivedLabels = !!e.target.checked; refreshLabelsAdmin(); },
+          }),
+          ' Show archived',
+        ),
+      ));
+      const labelForm = h('div', { class: 'settings-form' });
+      labelForm.appendChild(h('div', null,
+        h('label', null, 'Label name'),
+        h('input', { type: 'text', value: model.labelForm.name, onInput: e => { model.labelForm.name = e.target.value; } }),
+      ));
+      labelForm.appendChild(h('div', null,
+        h('label', null, 'Scope'),
+        h('select', {
+          value: model.labelForm.project_id,
+          onChange: e => { model.labelForm.project_id = e.target.value; },
+        },
+          h('option', { value: '' }, 'Global'),
+          state.projects.map(p => h('option', { value: String(p.id) }, p.name)),
+        ),
+      ));
+      labelForm.appendChild(h('div', { class: 'full' },
+        h('label', null, 'Color'),
+        h('div', { class: 'palette' }, ['red','blue','amber','green','violet','slate','pink','cyan'].map(c => h('button', {
+          class: 'swatch named' + (model.labelForm.color === c ? ' on' : ''),
+          style: { background: labelCssColor(c) },
+          title: c,
+          onClick: e => { e.preventDefault(); model.labelForm.color = c; redraw(); },
+        }))),
+      ));
+      labelForm.appendChild(h('div', { class: 'form-foot' },
+        model.labelErr ? h('span', { class: 'err' }, model.labelErr) : null,
+        model.labelForm.id ? h('button', { class: 'btn btn-ghost', onClick: () => { resetLabelForm(); redraw(); } }, 'Cancel edit') : null,
+        h('button', { class: 'btn btn-primary', disabled: model.saving, onClick: saveLabel }, model.labelForm.id ? 'Save label' : 'Create label'),
+      ));
+      body.appendChild(labelForm);
+
+      if (model.labelsLoading) body.appendChild(h('div', { class: 'empty' }, 'Loading labels…'));
+      else {
+        const labelList = h('div', { class: 'settings-list' });
+        for (const l of model.labels) {
+          labelList.appendChild(h('div', { class: 'settings-row' + (l.archived ? ' archived' : '') },
+            h('span', { style: {
+              width: '10px', height: '10px', borderRadius: '3px', background: labelCssColor(l.color), flexShrink: 0,
+            } }),
+            h('div', { class: 'row-main' },
+              h('div', { class: 'row-title' },
+                l.name,
+                l.archived ? h('span', { class: 'pill muted' }, 'Archived') : null,
+              ),
+              h('div', { class: 'row-meta' },
+                h('span', null, scopeLabel(l)),
+                h('span', null, `${l.usage_count || 0} task${(l.usage_count || 0) === 1 ? '' : 's'}`),
+                (l.usage_count || 0) === 0 ? h('span', { class: 'pill ok' }, 'Safe to archive') : null,
+              ),
+            ),
+            h('div', { class: 'row-actions' },
+              h('button', { class: 'btn btn-ghost', onClick: () => { resetLabelForm(l); redraw(); } }, 'Edit'),
+              h('button', { class: 'btn btn-ghost', onClick: () => mergeLabel(l) }, 'Merge'),
+              h('button', { class: 'btn btn-ghost', onClick: () => archiveLabel(l, !l.archived) }, l.archived ? 'Unarchive' : 'Archive'),
+              h('button', { class: 'btn btn-ghost', onClick: () => deleteLabel(l) }, 'Delete'),
+            ),
+          ));
+        }
+        if (!model.labels.length) labelList.appendChild(h('div', { class: 'empty' }, 'No labels found.'));
+        body.appendChild(labelList);
+      }
     }
 
     refreshProjects();
+    refreshLabelsAdmin();
     redraw();
     return frag;
   }

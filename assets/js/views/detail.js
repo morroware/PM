@@ -167,7 +167,11 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
           set.has(lid) ? set.delete(lid) : set.add(lid);
           const arr = [...set];
           try { const r = await onUpdate(task.id, { labels: arr }); Object.assign(task, r.task || {labels: arr}); redraw(); } catch(e){toast(e.message,'error');}
-        }, close, { keepOpen: true }));
+        }, close, {
+          keepOpen: true,
+          scopeProjectId: task.project,
+          onCreateLabel: window.pmCreateLabelFromPicker,
+        }));
       });
       wrap.appendChild(add);
       grid.appendChild(wrap);
