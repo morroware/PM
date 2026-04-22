@@ -1,443 +1,378 @@
-# Known-Gaps Implementation Plan
+# Product Upgrade Plan (Customization + Reliability)
 
-This plan covers the three deliberately-unimplemented features listed in
-`README.md:125-131`:
+This plan replaces the prior “known gaps only” scope with a full product upgrade roadmap focused on:
 
-1. File attachments on tasks
-2. Real-time updates across clients
-3. Admin UI for user / project / label management
+1. **Project customization** (create/rename/archive projects, richer labels, configurable workflows)
+2. **Slack collaboration** (bot-token channel alerts for project/task events and comments)
+3. **Team productivity parity** with tools like Monday/Asana (without breaking cPanel constraints), including recurring work
+4. **Reliability hardening** (confirm existing features are wired and working end-to-end)
 
-Every proposal preserves the repo's hard constraints (no build step, no
-Composer, no Node, cPanel-editable files only; see `CLAUDE.md`). Each
-section is self-contained so the three can ship in any order or in
-parallel PRs.
+The implementation must preserve repo constraints in `CLAUDE.md`: no build step, no Node/Composer, vanilla JS + PHP, cPanel-friendly deployment.
 
 ---
 
-## Gap 1 — File attachments
+## 0) Product goals and non-goals
 
-### Goal
+### Goals
 
-Let any authenticated user attach files to a task (images, docs, logs),
-see them in the task detail drawer, download them, and delete their own
-uploads. Admins can delete any upload.
+- Make the app **highly configurable** for real team workflows.
+- Reduce tool switching by integrating core updates into Slack.
+- Improve collaboration with task comments, project-level conventions, and clearer governance.
+- Support recurring operational workflows (weekly/monthly/yearly tasks) with optional reminder automation.
+- Increase confidence by adding systematic verification that all existing and new flows are fully wired.
 
-### Constraints & threats
+### Non-goals (for now)
 
-- Shared cPanel host: no S3, no object store, no antivirus daemon. Files
-  live on disk next to the app.
-- Must not turn `uploads/` into a public code-execution directory. PHP,
-  HTML, SVG (with inline `<script>`), and `.htaccess` are all hostile if
-  served back with the wrong `Content-Type` or as executables.
-- Must not expose arbitrary filesystem reads. Download path must route
-  through PHP and check auth + ownership.
-- Free-tier cPanel disk is small; cap size per file and total.
-
-### Schema
-
-New table, added to `pm_install_schema` in `install.php`:
-
-```sql
-CREATE TABLE IF NOT EXISTS attachments (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    task_id INT NOT NULL,
-    user_id INT NULL,                    -- uploader; NULL if user deleted
-    original_name VARCHAR(255) NOT NULL, -- what the user saw
-    stored_name   VARCHAR(80)  NOT NULL, -- random, on disk
-    mime_type     VARCHAR(120) NOT NULL,
-    size_bytes    INT UNSIGNED NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_att_task (task_id),
-    CONSTRAINT fk_att_task FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-    CONSTRAINT fk_att_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
-
-### Storage layout
-
-- Directory: `uploads/` at the repo root, created by `install.php` with
-  mode `0775`. Protected by a dedicated `uploads/.htaccess`:
-
-  ```apache
-  # Deny direct script execution in the uploads folder.
-  <FilesMatch "\.(php|phtml|phar|pl|py|cgi|rb|jsp|asp|aspx|sh)$">
-      Require all denied
-  </FilesMatch>
-  # Strip default PHP handler in case the FilesMatch is bypassed.
-  <IfModule mod_php7.c>   php_flag engine off </IfModule>
-  <IfModule mod_php.c>    php_flag engine off </IfModule>
-  # Force safe Content-Type on served files — keep this when adding
-  # direct-serve later; for now all reads go through api/attachments.php.
-  Options -Indexes -ExecCGI
-  ```
-
-- File naming: `stored_name = bin2hex(random_bytes(16)) . '.' . $safeExt`.
-  Never reuse the user's filename; keep the original only in the DB
-  column we render in the UI.
-- Per-task subdir optional (e.g. `uploads/t<id>/…`) if we ever need
-  cleanup by task; start flat to keep it simple.
-
-### New endpoint: `api/attachments.php`
-
-Follows the same shape as the other resource files.
-
-- `GET  api/attachments.php?task_id=N` — list attachments for a task
-  (authenticated).
-- `POST api/attachments.php?task_id=N` — multipart upload; one file per
-  request (the drawer can loop for multi-select). Validation:
-  - `pm_require_auth()`.
-  - Confirm task exists.
-  - Inspect `$_FILES['file']['error']`, cap size (e.g. 10 MiB per file
-    via config flag `upload_max_bytes`, default `10 * 1024 * 1024`).
-  - Re-derive MIME via `finfo_file($tmp, FILEINFO_MIME_TYPE)`. Whitelist
-    a conservative set: images, PDFs, text, office docs, archives.
-    Reject SVG (inline scripts), `text/html`, anything unrecognised.
-  - Sanitise the extension against the detected MIME (build an inverse
-    map; reject mismatches).
-  - `move_uploaded_file()` into `uploads/…`. On failure, do not leave
-    orphan DB rows.
-  - Return the row + public shape.
-  - `pm_log_activity($uid, $task_id, 'attached', $original_name)`.
-- `GET  api/attachments.php?id=N` — stream the file back:
-  - Auth check.
-  - Look up row + stored_name from DB.
-  - `header('Content-Type: ' . $mime)`,
-    `Content-Disposition: inline; filename="<sanitised original>"`
-    (attachment for non-preview types).
-  - Add `X-Content-Type-Options: nosniff`,
-    `Content-Security-Policy: default-src 'none'`.
-  - `readfile()` with `header('Content-Length: ' . filesize)`.
-- `DELETE api/attachments.php?id=N` — owner-or-admin; `unlink()` then
-  delete the row. Tolerate missing file.
-
-### Config additions (`api/config.php`)
-
-```php
-'upload_max_bytes' => 10 * 1024 * 1024,
-'upload_mime_whitelist' => [
-    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
-    'application/pdf',
-    'text/plain', 'text/csv',
-    'application/zip',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-],
-```
-
-### API.js additions
-
-```js
-listAttachments(taskId) { return this.get(`attachments.php?task_id=${taskId}`); }
-uploadAttachment(taskId, file) {
-  const fd = new FormData();
-  fd.append('file', file);
-  // FormData upload: bypass the JSON wrapper in API.request().
-  return fetch(`${this.base}/attachments.php?task_id=${taskId}`, {
-    method: 'POST', body: fd, credentials: 'same-origin',
-  }).then(async r => {
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(j.error || `HTTP ${r.status}`), { status: r.status });
-    return j;
-  });
-}
-deleteAttachment(id) { return this.del(`attachments.php?id=${id}`); }
-attachmentUrl(id) { return `${this.base}/attachments.php?id=${id}`; }
-```
-
-### UI: task detail drawer (`assets/js/views/detail.js`)
-
-Add an "Attachments" section between Subtasks and Comments:
-
-- Drag-drop zone + `<input type="file" multiple>` (falls back on iOS).
-- List existing attachments with filename, size, uploader, time, download
-  icon (links to `attachmentUrl`), delete icon (owner / admin only).
-- Inline previews for images (thumbnail) via the same endpoint.
-- Uses the same `pm_log_activity` path so the dashboard feed notes the
-  upload.
-
-`state.tasks[*].attachments_count` can be added to the `tasks.php` list
-shape (another small query grouped like `comments`) so the drawer head
-can show `📎 3` without an extra request; initial list fetch happens on
-drawer open (same pattern as comments caching — see
-`window._pmCommentsCache` in `detail.js:4`).
-
-### Install/migration steps
-
-- `install.php`:
-  - Add the `CREATE TABLE IF NOT EXISTS attachments` to
-    `pm_install_schema`.
-  - Create `uploads/` directory and drop the `.htaccess` file into it
-    programmatically the first time (idempotent check on existence).
-- README: document the `uploads/` folder write-permission requirement
-  and the ability to tune `upload_max_bytes`.
-
-### Testing checklist
-
-- Upload small + near-limit + over-limit files; verify rejection + 413.
-- Upload `evil.php` renamed to `.jpg` — confirm MIME sniff rejects.
-- Delete an attachment as non-owner / non-admin → 403.
-- Delete a task → attachments cascade → files orphaned on disk; add a
-  cleanup step in the task-delete handler (`pm_delete_task` in
-  `api/tasks.php:249`) that `SELECT`s attachment paths before the task
-  DELETE and `unlink()`s them after the row cascades.
-- Hit `uploads/foo.php` directly → 403 from Apache.
-- Sign out, hit `api/attachments.php?id=…` → 401.
-
-### Effort
-
-~1 day. Biggest risks are MIME whitelisting and making sure shared-host
-Apache honours the `uploads/.htaccess` rules. Keep the whitelist
-conservative and document how to extend it.
+- Re-platforming to a framework.
+- Introducing background workers/queues requiring shell daemons.
+- Deep enterprise features (SSO/SCIM/custom app marketplace).
 
 ---
 
-## Gap 2 — Real-time updates
+## 1) Foundation and validation first (stabilization sprint)
 
-### Goal
+Before adding new UX, verify current behavior and fix wiring gaps so we don’t layer features on unstable foundations.
 
-When teammate A changes a task, teammate B's open browser reflects the
-change within ~5 seconds without a manual reload. Works on vanilla shared
-cPanel hosting (no websockets, no long-lived worker processes guaranteed).
+### 1.1 End-to-end baseline audit
 
-### Why polling beats SSE here
+Create a **manual + script-assisted test matrix** for all existing capabilities:
 
-- cPanel hosts frequently kill scripts exceeding `max_execution_time`
-  (typically 30 s) and PHP-FPM workers are shared — an SSE connection
-  pinning a worker per client is a bad fit for a free-tier box.
-- HTTP/1.1 browsers limit connections per origin; a long-lived SSE stream
-  eats one of six.
-- The app is already stateless; polling is trivial to add and easy to
-  turn off. Start here; upgrade to SSE only if polling cost becomes an
-  issue.
+- Authentication: login/logout/register/profile update/role constraints.
+- Views: Dashboard, Kanban drag/drop, List grouping/sorting, Checklist, Calendar.
+- Task detail drawer: title, description, due date, priority, status, assignees, labels, estimate, subtasks, comments.
+- Filters + search + keyboard shortcuts.
+- Activity feed consistency.
 
-**Decision**: incremental polling with ETag-style cheap dedup, every
-~8 s while the tab is visible, backoff when hidden.
+### 1.2 API/UI wiring checks
 
-### Schema
+For each feature above, confirm:
 
-Reuse the existing `activity` table as a change feed. Every mutation path
-in `api/tasks.php` already calls `pm_log_activity`; extend comparably for
-`projects.php`, `labels.php`, `users.php`, `attachments.php` for write
-actions that should broadcast. Add an index:
+- API endpoint exists and is permission-guarded correctly.
+- API response shape matches frontend expectation.
+- UI updates local state consistently and survives refresh.
+- Errors are surfaced via user-facing toast/inline feedback.
 
-```sql
-ALTER TABLE activity ADD INDEX idx_act_id (id);
--- already the PK, but double-checking because InnoDB clusters on PK and
--- we'll query `WHERE id > ? ORDER BY id ASC LIMIT 100`.
-```
+### 1.3 Regression suite definition
 
-Optional, cheaper path: add a dedicated `changes` table with fewer
-columns (`id BIGINT PK AUTO_INCREMENT`, `kind ENUM`, `ref_id INT`,
-`created_at`). Defer until polling lag justifies it.
+Define a light “no-build” regression checklist runnable during each release:
 
-### New endpoint: `api/changes.php`
+- Smoke tests for all critical paths.
+- Role-based authorization checks (admin vs member).
+- Data integrity checks (FK cascades and retained history behavior).
 
-```
-GET api/changes.php?since=<lastSeenActivityId>
-  ← { "cursor": <max_id>, "changes": [ { "kind": "task|comment|...", "id": N }, ... ] }
-```
-
-- `pm_require_auth()`.
-- If `since` is null (first call), return `cursor = MAX(activity.id)` and
-  `changes = []`. Clients are then bootstrapped for the diff loop.
-- Otherwise SELECT the activity rows with `id > ?` (cap at 100). Collapse
-  rows per `(kind, ref_id)` so the client only re-fetches each affected
-  entity once.
-- Add `Cache-Control: no-store` (the bootstrap already sets it) and a
-  short-circuit `304` when `since == MAX(id)` to keep responses tiny.
-
-### Client changes (`assets/js/app.js`)
-
-- Add `state.changeCursor = null`.
-- On boot, call `API.getChanges(null)` once to seed the cursor.
-- Start a poll loop:
-
-  ```js
-  let pollTimer = null;
-  function startPolling() {
-    stopPolling();
-    const tick = async () => {
-      if (document.hidden) return;
-      try {
-        const r = await API.getChanges(state.changeCursor);
-        state.changeCursor = r.cursor;
-        if (r.changes.length) applyChanges(r.changes);
-      } catch (_) { /* swallow; next tick retries */ }
-    };
-    pollTimer = setInterval(tick, 8000);
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) tick();
-    });
-  }
-  ```
-
-- `applyChanges(changes)` branches on `kind`:
-  - `task` / `subtask` / `comment` / `attached` → refetch the affected
-    task via `API.get('tasks.php?id=' + id)` and merge into
-    `state.tasks`. If the drawer is open on that task, redraw. If a
-    comment affected the open task, invalidate
-    `window._pmCommentsCache[task.id]` and re-fetch.
-  - `project|label|user` → call the respective `list*` method and replace
-    the collection in `state`.
-  - `deleted` → drop the row from `state.tasks`; if the drawer was
-    showing it, close the drawer and toast "This task was deleted".
-- Re-render only when at least one change actually affected visible
-  state (compare before/after JSON length; it's a tiny app).
-- Expose `window.pmStopPolling()` so we can disable during tests and
-  `state.pollIntervalMs` (default 8000) for debugging.
-
-### Conflict handling
-
-The UI already optimistically updates on user action. With polling we can
-get a server version that disagrees with a field the user is mid-edit.
-Rules:
-
-- When the drawer is open and the user's textarea/input has focus, skip
-  overwriting that specific field (check `document.activeElement`'s
-  `dataset.field` attribute; add `data-field="description"` etc to the
-  inputs in `detail.js`).
-- For everything else, last-write-wins — accept the server's row.
-
-### Testing checklist
-
-- Two browsers side-by-side: status change in A appears in B within one
-  poll cycle.
-- Background tab for 5 minutes → foreground → tick immediately fires.
-- DB unreachable → polling logs but never spams the user.
-- Delete a task in A while it's open in B → drawer closes, toast shown.
-- Field-edit conflict: user typing in description in B while A saves —
-  B's in-flight buffer is not clobbered.
-
-### Effort
-
-~0.5 day for the happy path, +0.5 day for the conflict-handling polish.
+**Exit criteria:** team can run a repeatable checklist and trust current app behavior before feature expansion.
 
 ---
 
-## Gap 3 — Admin UI
+## 2) Project management upgrades
 
-### Goal
+### 2.1 Project lifecycle management
 
-Give admins a settings page to manage users, projects, and labels through
-the UI instead of `curl`. Non-admins should not see the page at all.
+Add complete project controls in UI and API:
 
-### Layout
+- Create new project.
+- Rename/edit project metadata.
+- Archive/unarchive project (prefer archive over hard delete).
+- Optional project color/icon for visual organization.
+- Optional project owner and default assignees.
 
-Add an "Admin" entry in the sidebar footer menu (or as an extra
-view-tab gated by `state.me.is_admin`). Picked in that order because the
-topbar / filters row is already busy on narrow screens. Route key:
-`state.view = 'admin'`. Persisted like every other view.
+### 2.2 Project settings panel
 
-The admin page has three tabs, rendered in a new
-`assets/js/views/admin.js` file added to `index.html` before `app.js`:
+Introduce a project settings experience (admin + delegated owners):
 
-1. **Users** — table of all users; columns: avatar, name, email, role,
-   admin toggle, actions. Buttons:
-   - `Invite user` → modal that posts to
-     `auth.php?action=register` (admin path allows arbitrary roles). On
-     success, show the one-time password (admin set) or a generated
-     temporary one that the admin copies to share.
-   - Row actions: edit name/role/color, toggle `is_admin`, delete
-     (confirm; blocks self-delete, mirrors `api/users.php:17`).
-2. **Projects** — list of projects with add / edit / archive / delete;
-   wraps `api/projects.php`. Name, color swatch picker, `key_prefix`
-   (validated `^[A-Z0-9]{1,8}$`; surface the server-side rule in the
-   form).
-3. **Labels** — list of labels using the eight allowed colors
-   (`api/labels.php:19`). Add / rename / recolor / delete.
+- Project name/key/description.
+- Status model and default task fields for that project.
+- Notification preferences (Slack channel mapping, event toggles).
 
-### Client-side guard
+### 2.3 Guardrails and migration behavior
 
-`renderApp` refuses to even render the admin view unless
-`state.me.is_admin` is true. This is a UX affordance only — all writes
-are already guarded server-side in the respective PHP files.
-
-### API additions
-
-Most endpoints exist. Two small gaps to close first:
-
-- `api/users.php` currently doesn't handle `GET api/users.php?id=N`. Add
-  a single-user GET so the edit modal can hydrate without scanning the
-  list. (Trivial.)
-- Admin-invite flow: `auth.php?action=register` already works when the
-  caller is an admin (see `auth.php:44-47`). Add an optional `is_admin`
-  pass-through from the body so an invited user can be created as an
-  admin in one call. Without it, the admin has to PATCH the user
-  afterwards — acceptable but clunky.
-
-### File plan
-
-- New: `assets/js/views/admin.js` — one `renderAdmin(state, handlers)`
-  function; internal tab state via closure; posts through the existing
-  `API.*` methods.
-- Edit: `assets/js/app.js`
-  - Add `'admin'` to the view switch in `renderMain` (guarded by
-    `state.me.is_admin`).
-  - Add a sidebar-footer "Admin" shortcut icon, visible only for admins.
-- Edit: `index.html` — add the `<script src>` tag.
-- Edit: `assets/js/api.js` — add `inviteUser`, `updateUser`,
-  `deleteUser`, `createProject`, `updateProject`, `deleteProject`,
-  `createLabel`, `updateLabel`, `deleteLabel`. Most of these are
-  one-liners over the existing `post/patch/del` helpers.
-- Edit: `api/users.php` — implement the `GET ?id=N` branch, admin-only.
-- Edit: `api/auth.php` — allow `is_admin` in `register` only when the
-  caller is already admin.
-
-### UX details
-
-- Color picker for projects reuses the profile-modal palette in
-  `app.js:621`.
-- Label color picker uses the eight-color named list; map names to the
-  same hex values used in `labelCssColor` (`app.js:291-295`).
-- After any write, re-fetch the full collection (`list*`) and replace
-  `state.projects` / `state.labels` / `state.users`. Toast on success
-  and error.
-- The admin page is the only place that can flip `is_admin`; hide the
-  control from the current user's own row (you can't demote yourself
-  while you're logged in).
-
-### Testing checklist
-
-- Non-admin visits `#admin` (or clicks the entry) → nothing happens;
-  they stay on their previous view.
-- Admin adds a user → appears in assignee picker immediately without a
-  full reload (state list was updated).
-- Admin archives a project → it disappears from the sidebar and filter
-  pills (projects endpoint already filters `archived = 0`).
-- Delete a label that's attached to tasks → cascade removes the join
-  rows; verify task tag chips disappear on next render.
-- Delete a user referenced by comments / activity → comments survive
-  with "Former teammate" author (matches
-  `pm_comment_shape` in `tasks.php:299`).
-
-### Effort
-
-~1 day, mostly UI scaffolding. The backend is already 90% there.
+- Prevent deleting/archiving active projects without confirmation and impact summary.
+- Define behavior for existing tasks when project settings change.
+- Add audit logs for project-level administrative actions.
 
 ---
 
-## Sequencing recommendation
+## 3) Labels and taxonomy upgrades
 
-1. **Admin UI first** — no new security surface, pure frontend wiring
-   on top of already-hardened endpoints. Ships in a day and removes the
-   main "API-only" papercut.
-2. **Real-time updates second** — independent of everything else, and
-   unlocks the collaborative feel that justifies the other two features.
-3. **File attachments last** — biggest security surface; lands better
-   once we have the admin UI to manage per-user storage quotas (a
-   possible v2 feature) and the polling channel to notify peers of new
-   attachments instantly.
+### 3.1 Label CRUD improvements
 
-Each lands as its own PR against `main` for a smaller review diff.
+Support richer label creation and maintenance:
 
-## Out of scope (explicit non-goals)
+- Create labels from task UI and project settings.
+- Rename, recolor, merge, archive labels.
+- Label scope modes:
+  - Global labels
+  - Project-scoped labels
 
-- Notifications (email, push). Needs SMTP creds we don't have in the
-  stock cPanel flow. Revisit separately.
-- Per-project access control. Today any authenticated user sees every
-  project. Adding a membership table is a separate feature and would
-  ripple through filters, activity, and every query in `tasks.php`.
-- Export / import. Not requested; out of this plan.
-- Mobile app. The current UI is responsive-enough; a wrapper is a
-  separate project.
+### 3.2 Label governance
+
+- Reserved/system labels (optional).
+- Duplicate prevention (`name + scope`).
+- Usage counts and “safe to archive” hints.
+
+### 3.3 Better label UX
+
+- Typeahead creation (“create label ‘Blocked’”).
+- Label filtering improvements across all views.
+- Bulk add/remove labels in list view for multiple tasks.
+
+---
+
+## 4) Comments and collaboration upgrades
+
+### 4.1 Universal task comments
+
+Ensure comments are consistently available from every task entry point:
+
+- Detail drawer (existing, upgraded UX).
+- Quick-access comments preview from list/kanban cards.
+- Comment count badges in all major views.
+
+### 4.2 Comment capabilities (phased)
+
+- Phase A: Create + read comments reliably.
+- Phase B: Edit/delete own comments; admin moderation controls.
+- Phase C: @mention teammates and surface mention notifications.
+
+### 4.3 Collaboration quality
+
+- Timestamp and author clarity.
+- Optional markdown-lite formatting.
+- Large-thread usability (pagination/load more).
+
+---
+
+## 5) Slack integration (bot token + channel alerts)
+
+### 5.1 Integration model
+
+Provide workspace-level Slack settings:
+
+- Bot token storage in server config/DB with secure handling.
+- Connectivity validation (“test connection” and “test message”).
+- Default channel and optional per-project channel overrides.
+
+### 5.2 Event routing
+
+Configurable events:
+
+- Task completed.
+- Project completed/archived.
+- New task comments.
+- Optional: task assigned, due date changed, priority escalated.
+
+Each event should support:
+
+- Enable/disable toggle.
+- Channel target selection.
+- Message template customization (basic placeholders).
+
+### 5.3 Delivery reliability and safety
+
+- Non-blocking UX: Slack failures should not block task/project saves.
+- Retry policy for transient errors (within request-safe limits).
+- Error logging visible to admins (last delivery status per event).
+- Rate-limit awareness and graceful degradation.
+
+### 5.4 Security
+
+- Keep bot tokens out of frontend payloads and logs.
+- Restrict integration settings to admin roles.
+- Document token rotation process and revocation fallback.
+
+---
+
+## 6) “Asana/Monday-like” customization roadmap
+
+Implement in pragmatic phases for maximum value with minimal risk.
+
+### 6.1 Workflow customization
+
+- Configurable status columns per project.
+- Optional required fields by status transition.
+- Task templates (e.g., Bug, Feature, Onboarding).
+
+### 6.2 Views and productivity
+
+- Saved filters/views per user.
+- Bulk operations (status/assignee/labels/due date).
+- Better calendar planning controls (drag to reschedule).
+
+### 6.3 Planning and reporting
+
+- Project progress indicators and health states.
+- Workload balancing insights by assignee.
+- Time estimate vs completion reporting.
+
+### 6.4 Automations (rule-lite)
+
+Simple “if-this-then-that” rules without external workers:
+
+- When status changes to Done -> notify Slack.
+- When due date is within X days and not done -> mark at-risk label.
+- When comment contains @mention -> notify user + optional Slack ping.
+
+### 6.5 Recurring tasks and optional reminders
+
+Add first-class recurring task support with predictable generation behavior:
+
+- Cadences: daily, weekly, monthly, yearly, plus “every N” interval variants.
+- End conditions: never ends, ends on date, ends after N occurrences.
+- Generation mode:
+  - Rolling single-instance (create next when current is completed).
+  - Pre-generated horizon (e.g., next 4 occurrences for planning views).
+- Date rules:
+  - Monthly by day-of-month (with short-month handling policy).
+  - Weekly by weekday(s).
+  - Yearly by month/day.
+- Ownership/assignment inheritance rules from parent recurring template.
+
+Reminder model (optional and configurable):
+
+- In-app reminders per occurrence (e.g., 1 day before, day-of, overdue).
+- Optional Slack reminders per recurrence rule or per task instance.
+- Quiet hours / timezone-aware send windows to avoid noisy off-hours alerts.
+- “Skip once” and “pause recurrence” controls to handle holidays/exceptions.
+
+---
+
+## 7) Data model and API evolution plan
+
+Design changes should be additive and backwards-compatible where possible.
+
+### 7.1 Schema evolution principles
+
+- Use idempotent migration style consistent with `install.php`.
+- Prefer `archived_at` soft lifecycle fields for projects/labels before hard deletes.
+- Add settings tables for integrations and notification rules.
+- Add recurrence tables/fields to track templates, next-run cursor, and generated instances safely.
+
+### 7.2 API versioning strategy (lightweight)
+
+- Maintain current endpoints; extend response payloads carefully.
+- Add fields rather than replacing keys when possible.
+- Document contract changes in `README.md` and release notes.
+
+### 7.3 Activity/audit expansion
+
+- Log admin actions (project rename/archive, label merges, integration edits).
+- Distinguish user-facing feed events from admin audit events if needed.
+
+---
+
+## 8) UI/UX upgrade plan
+
+### 8.1 Information architecture
+
+Add a clear **Settings/Admin** area with sections for:
+
+- Users & roles
+- Projects
+- Labels
+- Integrations (Slack)
+- Automation rules (future)
+
+### 8.2 Interaction standards
+
+- Consistent dialogs for create/rename/archive actions.
+- Inline validation with clear error messages.
+- Optimistic updates where safe; fallback to refetch on conflict.
+
+### 8.3 Accessibility and polish
+
+- Keyboard focus management in modals/drawers.
+- ARIA labels for controls and icons.
+- Color contrast checks for label chips/status badges.
+
+---
+
+## 9) Quality, reliability, and release process
+
+### 9.1 Test plan categories
+
+- Functional: every feature path.
+- Permission/security: role boundaries and endpoint access.
+- Integration: Slack connectivity and event delivery.
+- Recurrence: schedule generation correctness, DST/month-end edge cases, and reminder timing.
+- Regression: existing view behavior unchanged.
+- Data integrity: project/label lifecycle effects on related tasks.
+
+### 9.2 Rollout strategy
+
+- Feature-flag major additions (Slack + advanced customization).
+- Ship in small increments:
+  1) Foundation validation + project/label CRUD UX
+  2) Comment reliability + Slack core events
+  3) Workflow customization + bulk/saved views
+  4) Recurring tasks + optional reminders
+  5) Automation + richer reporting
+
+### 9.3 Observability
+
+- Admin-visible diagnostics page:
+  - Last API errors
+  - Slack delivery failures
+  - Version and schema status
+
+---
+
+## 10) Priority roadmap (recommended)
+
+### Milestone A — “Core Admin Control” (High priority)
+
+- Project create/rename/archive UI + API hardening.
+- Label create/rename/archive + project-scoped labels.
+- Baseline regression checklist for existing features.
+
+### Milestone B — “Team Collaboration” (High priority)
+
+- Universal comments improvements + comment badges.
+- Slack bot token setup + channel mapping.
+- Slack events for task complete + new comments.
+- Recurring task templates with weekly/monthly/yearly cadence support.
+
+### Milestone C — “Operational Maturity” (Medium priority)
+
+- Project completion alerts and configurable event matrix.
+- Admin audit trail and integration diagnostics.
+- UI consistency/accessibility pass.
+- Optional Slack reminders for recurring tasks with timezone-safe delivery windows.
+
+### Milestone D — “Advanced Customization” (Medium priority)
+
+- Configurable workflows/statuses per project.
+- Saved views and bulk edits.
+- Rule-lite automations.
+
+---
+
+## 11) Acceptance criteria for this upgrade program
+
+The initiative is successful when:
+
+- Teams can create and rename projects and manage labels fully in UI.
+- Slack alerts reliably fire for configured task/project/comment events.
+- Recurring tasks generate correctly on schedule, with optional Slack reminders working when enabled.
+- Comments are easily accessible across all task surfaces.
+- Existing functionality remains stable (validated by regression checklist).
+- Admins can configure the system without API-only workarounds.
+
+---
+
+## 12) Documentation updates required alongside implementation
+
+For each shipped milestone, update:
+
+- `README.md` feature list and setup instructions.
+- Integration setup docs (Slack token scopes, channel setup, troubleshooting).
+- “What changed” section with any migration/re-run `install.php` instructions.
+
+---
+
+## 13) Risk register
+
+- **Slack API failure/rate limits** → non-blocking sends + retries + visible admin logs.
+- **Scope creep** from “Asana-like” breadth → strict phased delivery with acceptance criteria per milestone.
+- **Permission bugs** in new admin UI → explicit role tests for every write endpoint.
+- **UI regressions** due to expanded state complexity → mandatory regression checklist before release.
+- **Recurrence edge cases** (DST, month-end, leap year, missed runs) → canonical scheduling rules + deterministic tests.
