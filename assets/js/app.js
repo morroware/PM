@@ -37,8 +37,22 @@
   const saved = localStorage.getItem('pm_project');
   if (saved && saved !== 'null') state.filterProject = parseInt(saved, 10);
 
-  // Kick off activity fetch in background.
+  // Activity is fetched at boot and re-fetched (debounced) whenever something
+  // in the UI makes a change that might produce a server-side activity row.
+  // We keep it cheap: only the dashboard actually consumes it.
+  function refreshActivity() {
+    clearTimeout(refreshActivity._t);
+    refreshActivity._t = setTimeout(() => {
+      API.listActivity().then(r => {
+        state.activity = r.activity;
+        if (state.view === 'dashboard') renderApp();
+      }).catch(() => {});
+    }, 400);
+  }
   API.listActivity().then(r => { state.activity = r.activity; if (state.view === 'dashboard') renderApp(); }).catch(() => {});
+  // Exposed so view modules (e.g. task drawer when a comment is posted) can
+  // nudge the feed without reaching into app.js internals.
+  window.pmRefreshActivity = () => refreshActivity();
 
   // ----- actions -----
   async function refreshTasks() {
@@ -50,6 +64,7 @@
     const r = await API.updateTask(id, patch);
     state.tasks = state.tasks.map(t => t.id === id ? r.task : t);
     renderApp();
+    refreshActivity();
     return r;
   }
   async function moveTask(id, statusId) { return updateTask(id, { status: statusId }); }
@@ -73,6 +88,7 @@
     const r = await API.createTask(data);
     state.tasks = [r.task, ...state.tasks];
     renderApp();
+    refreshActivity();
     return r.task;
   }
 

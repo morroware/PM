@@ -40,11 +40,7 @@ pm_error('Method not allowed', 405);
 
 // ----------- handlers -----------
 
-function pm_task_row_to_shape(array $t): array {
-    $labels    = pm_fetch_all('SELECT label_id FROM task_labels WHERE task_id = ?', [$t['id']]);
-    $assignees = pm_fetch_all('SELECT user_id  FROM task_assignees WHERE task_id = ?', [$t['id']]);
-    $subs      = pm_fetch_all('SELECT id, text, done FROM subtasks WHERE task_id = ? ORDER BY sort_order, id', [$t['id']]);
-    $cmtRow    = pm_fetch_one('SELECT COUNT(*) AS c FROM comments WHERE task_id = ?', [$t['id']]);
+function pm_task_base_shape(array $t): array {
     return [
         'id'          => (int)$t['id'],
         'ref'         => $t['ref'],
@@ -55,22 +51,77 @@ function pm_task_row_to_shape(array $t): array {
         'priority'    => (int)$t['priority'],
         'due'         => $t['due'],
         'estimate'    => $t['estimate'],
-        'labels'      => array_map(fn($r) => (int)$r['label_id'], $labels),
-        'assignees'   => array_map(fn($r) => (int)$r['user_id'],  $assignees),
-        'subtasks'    => array_map(fn($r) => [
-            'id'   => (int)$r['id'],
-            'text' => $r['text'],
-            'done' => (bool)$r['done'],
-        ], $subs),
-        'comments'    => (int)$cmtRow['c'],
+        'labels'      => [],
+        'assignees'   => [],
+        'subtasks'    => [],
+        'comments'    => 0,
         'created_at'  => $t['created_at'],
         'updated_at'  => $t['updated_at'],
     ];
 }
 
+// Single-task version used after create/update. Does 4 small queries; cheap.
+function pm_task_row_to_shape(array $t): array {
+    $shape = pm_task_base_shape($t);
+    $labels    = pm_fetch_all('SELECT label_id FROM task_labels WHERE task_id = ?', [$t['id']]);
+    $assignees = pm_fetch_all('SELECT user_id  FROM task_assignees WHERE task_id = ?', [$t['id']]);
+    $subs      = pm_fetch_all('SELECT id, text, done FROM subtasks WHERE task_id = ? ORDER BY sort_order, id', [$t['id']]);
+    $cmtRow    = pm_fetch_one('SELECT COUNT(*) AS c FROM comments WHERE task_id = ?', [$t['id']]);
+    $shape['labels']    = array_map(fn($r) => (int)$r['label_id'], $labels);
+    $shape['assignees'] = array_map(fn($r) => (int)$r['user_id'],  $assignees);
+    $shape['subtasks']  = array_map(fn($r) => [
+        'id'   => (int)$r['id'],
+        'text' => $r['text'],
+        'done' => (bool)$r['done'],
+    ], $subs);
+    $shape['comments']  = (int)$cmtRow['c'];
+    return $shape;
+}
+
 function pm_list_tasks(): void {
     $rows = pm_fetch_all('SELECT * FROM tasks ORDER BY id DESC');
-    $out = array_map('pm_task_row_to_shape', $rows);
+    if (!$rows) { pm_json(['tasks' => []]); return; }
+
+    // Avoid N+1: pull related rows in one shot per table, then bucket in PHP.
+    $ids = array_map(fn($r) => (int)$r['id'], $rows);
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+
+    $labelsByTask    = [];
+    $assigneesByTask = [];
+    $subsByTask      = [];
+    $commentsByTask  = [];
+
+    foreach (pm_fetch_all("SELECT task_id, label_id FROM task_labels WHERE task_id IN ($ph)", $ids) as $r) {
+        $labelsByTask[(int)$r['task_id']][] = (int)$r['label_id'];
+    }
+    foreach (pm_fetch_all("SELECT task_id, user_id FROM task_assignees WHERE task_id IN ($ph)", $ids) as $r) {
+        $assigneesByTask[(int)$r['task_id']][] = (int)$r['user_id'];
+    }
+    foreach (pm_fetch_all(
+        "SELECT id, task_id, text, done FROM subtasks
+         WHERE task_id IN ($ph) ORDER BY sort_order, id",
+        $ids
+    ) as $r) {
+        $subsByTask[(int)$r['task_id']][] = [
+            'id'   => (int)$r['id'],
+            'text' => $r['text'],
+            'done' => (bool)$r['done'],
+        ];
+    }
+    foreach (pm_fetch_all("SELECT task_id, COUNT(*) AS c FROM comments WHERE task_id IN ($ph) GROUP BY task_id", $ids) as $r) {
+        $commentsByTask[(int)$r['task_id']] = (int)$r['c'];
+    }
+
+    $out = [];
+    foreach ($rows as $t) {
+        $id = (int)$t['id'];
+        $shape = pm_task_base_shape($t);
+        $shape['labels']    = $labelsByTask[$id]    ?? [];
+        $shape['assignees'] = $assigneesByTask[$id] ?? [];
+        $shape['subtasks']  = $subsByTask[$id]      ?? [];
+        $shape['comments']  = $commentsByTask[$id]  ?? 0;
+        $out[] = $shape;
+    }
     pm_json(['tasks' => $out]);
 }
 
@@ -194,8 +245,10 @@ function pm_delete_task(int $id): void {
 function pm_add_subtask(int $taskId): void {
     $text = trim((string)pm_param('text', ''));
     if ($text === '') pm_error('Text required');
+    $maxRow = pm_fetch_one('SELECT COALESCE(MAX(sort_order), 0) AS m FROM subtasks WHERE task_id = ?', [$taskId]);
+    $next = ((int)($maxRow['m'] ?? 0)) + 1;
     pm_exec('INSERT INTO subtasks (task_id, text, done, sort_order) VALUES (?,?,0,?)',
-        [$taskId, $text, time() % 2147483647]);
+        [$taskId, $text, $next]);
     $sid = pm_last_id();
     $s = pm_fetch_one('SELECT id, text, done FROM subtasks WHERE id = ?', [$sid]);
     pm_json(['subtask' => [
@@ -207,13 +260,19 @@ function pm_update_subtask(int $taskId, int $subId): void {
     $body = pm_body();
     $fields = [];
     $params = [];
-    if (array_key_exists('text', $body)) { $fields[] = 'text = ?'; $params[] = $body['text']; }
+    if (array_key_exists('text', $body)) {
+        $text = trim((string)$body['text']);
+        if ($text === '') pm_error('Subtask text cannot be empty');
+        $fields[] = 'text = ?';
+        $params[] = $text;
+    }
     if (array_key_exists('done', $body)) { $fields[] = 'done = ?'; $params[] = !empty($body['done']) ? 1 : 0; }
     if (!$fields) pm_error('Nothing to update');
     $params[] = $subId;
     $params[] = $taskId;
     pm_exec('UPDATE subtasks SET ' . implode(',', $fields) . ' WHERE id = ? AND task_id = ?', $params);
-    $s = pm_fetch_one('SELECT id, text, done FROM subtasks WHERE id = ?', [$subId]);
+    $s = pm_fetch_one('SELECT id, text, done FROM subtasks WHERE id = ? AND task_id = ?', [$subId, $taskId]);
+    if (!$s) pm_error('Subtask not found', 404);
     pm_json(['subtask' => [
         'id'=>(int)$s['id'],'text'=>$s['text'],'done'=>(bool)$s['done']
     ]]);
@@ -225,22 +284,28 @@ function pm_delete_subtask(int $taskId, int $subId): void {
 }
 
 // ---- comments ----
-function pm_list_comments(int $taskId): void {
-    $rows = pm_fetch_all(
-        'SELECT c.id, c.body, c.created_at, c.user_id, u.name, u.initials, u.color
-         FROM comments c JOIN users u ON u.id = c.user_id
-         WHERE c.task_id = ? ORDER BY c.id ASC',
-        [$taskId]
-    );
-    pm_json(['comments' => array_map(fn($r) => [
+function pm_comment_shape(array $r): array {
+    return [
         'id'         => (int)$r['id'],
         'body'       => $r['body'],
         'created_at' => $r['created_at'],
         'user'       => [
-            'id'=>(int)$r['user_id'],'name'=>$r['name'],
-            'initials'=>$r['initials'],'color'=>$r['color']
+            'id'       => $r['user_id'] !== null ? (int)$r['user_id'] : null,
+            'name'     => $r['name']     ?? 'Former teammate',
+            'initials' => $r['initials'] ?? '??',
+            'color'    => $r['color']    ?? '#64748B',
         ],
-    ], $rows)]);
+    ];
+}
+
+function pm_list_comments(int $taskId): void {
+    $rows = pm_fetch_all(
+        'SELECT c.id, c.body, c.created_at, c.user_id, u.name, u.initials, u.color
+         FROM comments c LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.task_id = ? ORDER BY c.id ASC',
+        [$taskId]
+    );
+    pm_json(['comments' => array_map('pm_comment_shape', $rows)]);
 }
 
 function pm_add_comment(int $taskId): void {
@@ -252,18 +317,10 @@ function pm_add_comment(int $taskId): void {
     $cid = pm_last_id();
     $r = pm_fetch_one(
         'SELECT c.id, c.body, c.created_at, c.user_id, u.name, u.initials, u.color
-         FROM comments c JOIN users u ON u.id = c.user_id WHERE c.id = ?',
+         FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?',
         [$cid]
     );
-    pm_json(['comment' => [
-        'id'         => (int)$r['id'],
-        'body'       => $r['body'],
-        'created_at' => $r['created_at'],
-        'user'       => [
-            'id'=>(int)$r['user_id'],'name'=>$r['name'],
-            'initials'=>$r['initials'],'color'=>$r['color']
-        ],
-    ]]);
+    pm_json(['comment' => pm_comment_shape($r)]);
 }
 
 function pm_log_activity(int $uid, ?int $taskId, string $action, ?string $detail = null): void {

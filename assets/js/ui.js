@@ -55,11 +55,19 @@ const STATUSES = [
 const statusById = id => STATUSES.find(s => s.id === id);
 
 // -------- Date helpers --------
+// All date math is local-wall-clock; we deliberately avoid toISOString() which
+// returns UTC and can shift the calendar day for users east of UTC.
 const today = () => { const d = new Date(); d.setHours(0,0,0,0); return d; };
+const ymd = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 const daysFromNow = (n) => {
   const d = today();
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return ymd(d);
 };
 const parseISO = s => { if (!s) return null; const d = new Date(s); d.setHours(0,0,0,0); return d; };
 
@@ -196,6 +204,12 @@ function openPopover(anchor, buildContent, { offset = 6, align = 'start' } = {})
   // Defer so the click that opened it doesn't immediately close it.
   setTimeout(() => document.addEventListener('mousedown', onDown, true), 0);
   document.addEventListener('keydown', onKey);
+  // HTML `autofocus` only runs on initial page load; inputs added dynamically
+  // need an explicit .focus() once they're in the DOM.
+  setTimeout(() => {
+    const input = pop.querySelector('input, textarea');
+    if (input) input.focus();
+  }, 0);
   return { close: closeMe, el: pop };
 }
 
@@ -326,6 +340,7 @@ window.userById = userById;
 window.projectById = projectById;
 window.labelById = labelById;
 window.today = today;
+window.ymd = ymd;
 window.daysFromNow = daysFromNow;
 window.parseISO = parseISO;
 window.Avatar = Avatar;

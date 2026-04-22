@@ -1,4 +1,8 @@
 // Task detail drawer.
+// Comments are cached per-task-id on the window so re-renders of the drawer
+// (which happen on every state update) don't re-fetch the same comments.
+window._pmCommentsCache = window._pmCommentsCache || {};
+
 function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubtask, onDeleteTask }) {
   const scrim = h('div', { class: 'scrim light', onClick: onClose });
   const drawer = h('div', { class: 'drawer' });
@@ -9,13 +13,17 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
   let editingTitle = false;
   let tempTitle = task.title;
   let newSubtaskText = '';
-  let comments = null;
+  let comments = window._pmCommentsCache[task.id] || null;
 
   async function loadComments() {
-    try { const r = await API.listComments(task.id); comments = r.comments || []; redraw(); }
-    catch (e) { toast('Could not load comments: ' + e.message, 'error'); }
+    try {
+      const r = await API.listComments(task.id);
+      comments = r.comments || [];
+      window._pmCommentsCache[task.id] = comments;
+      redraw();
+    } catch (e) { toast('Could not load comments: ' + e.message, 'error'); }
   }
-  loadComments();
+  if (comments === null) loadComments();
 
   function redraw() {
     drawer.replaceChildren();
@@ -37,7 +45,11 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
       h('button', { class: 'icon-btn', title: 'Delete',
         onClick: async () => {
           if (!confirm(`Delete ${task.ref}?\n\n${task.title}`)) return;
-          try { await onDeleteTask(task.id); onClose(); } catch (e) { toast(e.message, 'error'); }
+          try {
+            await onDeleteTask(task.id);
+            delete window._pmCommentsCache[task.id];
+            onClose();
+          } catch (e) { toast(e.message, 'error'); }
         } }, Icon('trash', 14)),
       h('button', { class: 'icon-btn', onClick: onClose }, Icon('x', 14)),
     ));
@@ -293,8 +305,10 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
         const r = await API.addComment(task.id, v);
         comments = comments || [];
         comments.push(r.comment);
+        window._pmCommentsCache[task.id] = comments;
         ccInput.value = '';
         redraw();
+        window.pmRefreshActivity && window.pmRefreshActivity();
       } catch(e){toast(e.message,'error');}
     };
     ccInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });

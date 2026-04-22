@@ -11,7 +11,9 @@ switch ($action) {
 
     case 'login': {
         if (pm_method() !== 'POST') pm_error('POST required', 405);
-        $email = trim((string)pm_param('email', ''));
+        // Match register's case-folding so 'Foo@bar.com' and 'foo@bar.com'
+        // always land on the same row regardless of the DB column collation.
+        $email = strtolower(trim((string)pm_param('email', '')));
         $pass  = (string)pm_param('password', '');
         if ($email === '' || $pass === '') pm_error('Email and password required');
         $u = pm_fetch_one('SELECT * FROM users WHERE email = ?', [$email]);

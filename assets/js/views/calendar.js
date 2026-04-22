@@ -19,7 +19,7 @@ function renderCalendar(tasks, { onOpenTask }) {
     const tasksByDate = {};
     for (const t of tasks) { if (!t.due) continue; (tasksByDate[t.due] = tasksByDate[t.due] || []).push(t); }
 
-    const todayISO = (() => { const d = today(); return d.toISOString().slice(0,10); })();
+    const todayISO = ymd(today());
     const monthName = firstDay.toLocaleDateString('en', { month: 'long', year: 'numeric' });
     const dow = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
 
@@ -36,29 +36,50 @@ function renderCalendar(tasks, { onOpenTask }) {
     const grid = h('div', { class: 'cal-grid' });
     for (const d of dow) grid.appendChild(h('div', { class: 'cal-dow' }, d));
     cells.forEach((c, i) => {
-      const iso = c.date.toISOString().slice(0, 10);
+      const iso = ymd(c.date);
       const dayTasks = tasksByDate[iso] || [];
       const isToday = iso === todayISO;
       const cell = h('div', { class: 'cal-cell' + (c.inMonth ? '' : ' not-in-month') + (i >= 35 ? ' last-row' : '') });
       cell.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' } },
         h('span', { class: 'cal-daynum' + (isToday ? ' today' : '') }, String(c.date.getDate())),
       ));
-      for (const t of dayTasks.slice(0, 3)) {
+      const renderEvent = (t) => {
         const proj = projectById(t.project);
         const done = t.status === 'done';
-        cell.appendChild(h('div', {
+        return h('div', {
           class: 'cal-event' + (done ? ' done' : ''),
           title: t.title,
           style: proj ? {
             background: proj.color + '18', color: proj.color,
             borderLeft: '2px solid ' + proj.color
           } : {},
-          onClick: () => onOpenTask(t.id),
-        }, t.title));
-      }
+          onClick: (e) => { e.stopPropagation(); onOpenTask(t.id); },
+        }, t.title);
+      };
+      for (const t of dayTasks.slice(0, 3)) cell.appendChild(renderEvent(t));
       if (dayTasks.length > 3) {
-        cell.appendChild(h('div', { style: { fontSize: '10.5px', color: 'var(--fg-3)', padding: '1px 6px', cursor: 'pointer' } },
-          `+${dayTasks.length - 3} more`));
+        const more = h('button', {
+          style: {
+            fontSize: '10.5px', color: 'var(--fg-2)', padding: '1px 6px',
+            cursor: 'pointer', textAlign: 'left', borderRadius: '4px',
+            background: 'var(--bg-3)', border: '1px solid var(--line)',
+          },
+          onClick: (e) => {
+            e.stopPropagation();
+            openPopover(more, ({ close }) => {
+              const list = h('div', { style: { padding: '4px', minWidth: '240px' } });
+              list.appendChild(h('div', { class: 'popover-header' },
+                c.date.toLocaleDateString('en', { weekday: 'long', month: 'short', day: 'numeric' })));
+              for (const t of dayTasks) {
+                const ev = renderEvent(t);
+                ev.addEventListener('click', () => close());
+                list.appendChild(ev);
+              }
+              return list;
+            });
+          },
+        }, `+${dayTasks.length - 3} more`);
+        cell.appendChild(more);
       }
       grid.appendChild(cell);
     });

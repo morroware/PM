@@ -112,7 +112,11 @@ function ListRow(task, onOpen, onToggleStatus) {
       h('div', { style: { width: pct + '%', height: '100%', background: pct === 100 ? 'var(--green)' : 'var(--acc-0)', transition: 'width 0.3s' } }))));
 
   row.appendChild(h('div', { style: { textAlign: 'right' } },
-    h('button', { class: 'icon-btn sm', onClick: (e) => e.stopPropagation() }, Icon('more', 14))));
+    h('button', {
+      class: 'icon-btn sm',
+      title: 'Open task',
+      onClick: (e) => { e.stopPropagation(); onOpen(task.id); },
+    }, Icon('more', 14))));
 
   return row;
 }
