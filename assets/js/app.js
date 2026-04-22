@@ -25,6 +25,7 @@
     labels:   boot.labels,
     tasks:    boot.tasks,
     activity: [],
+    savedViews: [],
     view: localStorage.getItem('pm_view') || 'dashboard',
     filterProject: null,
     filterAssignee: null,
@@ -89,6 +90,7 @@
     }, 400);
   }
   API.listActivity().then(r => { state.activity = r.activity; if (state.view === 'dashboard') renderApp(); }).catch(() => {});
+  API.listSavedViews().then(r => { state.savedViews = r.saved_views || []; renderApp(); }).catch(() => {});
   // Exposed so view modules (e.g. task drawer when a comment is posted) can
   // nudge the feed without reaching into app.js internals.
   window.pmRefreshActivity = () => refreshActivity();
@@ -169,6 +171,41 @@
     }
     await refreshTasks();
     toast(`Updated labels on ${ids.length} task${ids.length === 1 ? '' : 's'}`, 'success');
+  }
+  async function bulkUpdateTasks(taskIds, patch, successLabel = 'Updated tasks') {
+    const ids = [...new Set((taskIds || []).map(Number).filter(Boolean))];
+    if (!ids.length) return;
+    await API.bulkUpdateTasks(ids, patch);
+    await refreshTasks();
+    toast(`${successLabel} (${ids.length})`, 'success');
+  }
+  function applySavedView(sv) {
+    if (!sv) return;
+    state.view = sv.view_key || 'list';
+    state.filterProject = sv.filters?.project ?? null;
+    state.filterAssignee = sv.filters?.assignee ?? null;
+    state.filterLabels = Array.isArray(sv.filters?.labels) ? sv.filters.labels : [];
+    state.search = sv.filters?.search || '';
+    persist();
+    renderApp();
+  }
+  async function saveCurrentView() {
+    const name = prompt('Name this view');
+    if (!name) return;
+    const payload = {
+      name,
+      view_key: state.view,
+      filters: {
+        project: state.filterProject,
+        assignee: state.filterAssignee,
+        labels: state.filterLabels,
+        search: state.search,
+      },
+    };
+    const r = await API.createSavedView(payload);
+    state.savedViews = [r.saved_view, ...(state.savedViews || [])];
+    renderApp();
+    toast('Saved view created', 'success');
   }
 
   // ----- filter logic -----
@@ -349,7 +386,9 @@
       onMoveTask: (id, s) => moveTask(id, s),
       onToggleStatus: id => toggleStatus(id),
       onBulkLabels: bulkUpdateLabels,
+      onBulkUpdate: bulkUpdateTasks,
       onToggleSubtask: toggleSubtask,
+      onMoveTaskDate: (id, due) => updateTask(id, { due }),
       onNavigate: (v, projectId) => {
         state.view = v;
         if (projectId !== undefined) state.filterProject = projectId;
@@ -502,6 +541,29 @@
           onClick: () => { state.filterProject = null; state.filterAssignee = null; state.filterLabels = []; persist(); renderApp(); }
         }, Icon('x', 11), ' Clear'));
       }
+
+      const savedViews = state.savedViews || [];
+      const svBtn = h('button', { class: 'filter-pill' }, Icon('star', 12), ' Saved views ', Icon('chevronDown', 11));
+      svBtn.addEventListener('click', () => {
+        openPopover(svBtn, ({ close }) => {
+          const wrap = h('div', { style: { minWidth: '220px', padding: '4px' } });
+          wrap.appendChild(PopoverItem({
+            selected: false,
+            onSelect: async () => { close(); try { await saveCurrentView(); } catch (e) { toast(e.message, 'error'); } },
+            children: h('span', null, '+ Save current filters'),
+          }));
+          if (!savedViews.length) wrap.appendChild(h('div', { class: 'empty', style: { padding: '10px' } }, 'No saved views yet.'));
+          savedViews.forEach(v => {
+            wrap.appendChild(PopoverItem({
+              selected: false,
+              onSelect: () => { close(); applySavedView(v); },
+              children: h('span', null, v.name),
+            }));
+          });
+          return wrap;
+        });
+      });
+      bar.appendChild(svBtn);
 
       // Count
       const n = filteredTasks().length;

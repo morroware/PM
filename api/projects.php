@@ -136,7 +136,12 @@ if ($method === 'PATCH' && $id !== null) {
                     if ($channel !== '') {
                         $actor = pm_current_user();
                         $who = $actor['name'] ?? 'An admin';
-                        pm_slack_post($channel, ":package: {$who} archived project *{$row['name']}*.");
+                        $fallback = ":package: {$who} archived project *{$row['name']}*.";
+                        $text = pm_slack_render_event_text('project_archived', [
+                            'project' => $row['name'],
+                            'actor' => $who,
+                        ], $fallback);
+                        pm_slack_post($channel, $text, ['event_key' => 'project_archived']);
                     }
                 }
             } catch (Throwable $_) { /* best effort */ }

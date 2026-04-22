@@ -237,6 +237,19 @@ function pm_install_schema(): void {
             INDEX idx_rr_next (next_run),
             CONSTRAINT fk_rr_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+
+        "CREATE TABLE IF NOT EXISTS saved_views (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            name VARCHAR(120) NOT NULL,
+            view_key VARCHAR(24) NOT NULL DEFAULT 'list',
+            filters_json MEDIUMTEXT NOT NULL,
+            is_default TINYINT(1) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_sv_user (user_id),
+            CONSTRAINT fk_sv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     ];
     foreach ($sql as $q) $pdo->exec($q);
 
@@ -250,6 +263,7 @@ function pm_install_schema(): void {
     pm_migrate_add_column_if_missing('tasks',    'recurring_rule_id', 'INT NULL');
     pm_migrate_add_index_if_missing('labels', 'idx_lbl_project', '(project_id)');
     pm_migrate_add_index_if_missing('tasks',  'idx_recurring',   '(recurring_rule_id)');
+    pm_migrate_add_column_if_missing('comments', 'updated_at',   'TIMESTAMP NULL');
     pm_migrate_add_fk_if_missing(
         'labels', 'fk_lbl_project',
         'FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE'

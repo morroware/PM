@@ -16,7 +16,10 @@ function pm_slack_settings(): array {
             'task_assigned'   => false,
             'comment_added'   => true,
             'project_archived'=> false,
+            'mention_added'   => false,
         ],
+        'templates'       => [],
+        'delivery_history' => [],
         'last_ok_at'      => null,
         'last_error'      => null,
         'last_error_at'   => null,
@@ -55,40 +58,53 @@ function pm_slack_post(string $channel, string $text, array $opts = []): bool {
         pm_slack_note_error('No bot token configured');
         return false;
     }
+    $eventKey = (string)($opts['event_key'] ?? 'generic');
+    unset($opts['event_key']);
     $payload = array_merge([
         'channel' => $channel,
         'text'    => $text,
     ], $opts);
-
-    $ch = curl_init('https://slack.com/api/chat.postMessage');
-    curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 4,
-        CURLOPT_CONNECTTIMEOUT => 3,
-        CURLOPT_HTTPHEADER     => [
-            'Authorization: Bearer ' . $token,
-            'Content-Type: application/json; charset=utf-8',
-        ],
-        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-    ]);
-    $body = curl_exec($ch);
-    $err  = curl_error($ch);
-    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($body === false) {
-        pm_slack_note_error('Network error: ' . ($err ?: "HTTP $code"));
-        return false;
+    $attempts = 0;
+    $lastErr = '';
+    while ($attempts < 3) {
+        $attempts++;
+        $ch = curl_init('https://slack.com/api/chat.postMessage');
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 4,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: Bearer ' . $token,
+                'Content-Type: application/json; charset=utf-8',
+            ],
+            CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ]);
+        $body = curl_exec($ch);
+        $err  = curl_error($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false) {
+            $lastErr = 'Network error: ' . ($err ?: "HTTP $code");
+            if ($attempts < 3) usleep(100000 * $attempts);
+            continue;
+        }
+        $decoded = json_decode((string)$body, true);
+        $ok = is_array($decoded) && !empty($decoded['ok']);
+        if ($ok) {
+            pm_slack_note_ok();
+            pm_slack_log_delivery($eventKey, $channel, true, null);
+            return true;
+        }
+        $apiErr = is_array($decoded) ? ($decoded['error'] ?? 'Unknown Slack error') : 'Invalid response';
+        $lastErr = 'Slack API: ' . $apiErr;
+        $retryable = $code >= 500 || $code === 429 || in_array($apiErr, ['ratelimited','internal_error','fatal_error'], true);
+        if (!$retryable || $attempts >= 3) break;
+        usleep(100000 * $attempts);
     }
-    $decoded = json_decode((string)$body, true);
-    if (!is_array($decoded) || empty($decoded['ok'])) {
-        $msg = is_array($decoded) ? ($decoded['error'] ?? 'Unknown Slack error') : 'Invalid response';
-        pm_slack_note_error('Slack API: ' . $msg);
-        return false;
-    }
-    pm_slack_note_ok();
-    return true;
+    pm_slack_note_error($lastErr ?: 'Unknown error');
+    pm_slack_log_delivery($eventKey, $channel, false, $lastErr ?: 'Unknown error');
+    return false;
 }
 
 function pm_slack_note_error(string $msg): void {
@@ -119,4 +135,31 @@ function pm_slack_format_task(array $task, string $verb, ?array $actor = null, ?
     $base   = "{$proj}*{$ref}* {$title}\n{$who} {$verb}";
     if ($extra !== null && $extra !== '') $base .= "\n> " . mb_substr($extra, 0, 400);
     return $base;
+}
+
+function pm_slack_log_delivery(string $event, string $channel, bool $ok, ?string $error): void {
+    try {
+        $s = pm_slack_settings();
+        $history = is_array($s['delivery_history'] ?? null) ? $s['delivery_history'] : [];
+        array_unshift($history, [
+            'event' => $event,
+            'channel' => $channel,
+            'ok' => $ok,
+            'error' => $error ? mb_substr($error, 0, 200) : null,
+            'at' => date('Y-m-d H:i:s'),
+        ]);
+        $s['delivery_history'] = array_slice($history, 0, 30);
+        pm_setting_set('slack', $s);
+    } catch (Throwable $_) { /* ignore */ }
+}
+
+function pm_slack_render_event_text(string $event, array $vars, string $fallback): string {
+    $s = pm_slack_settings();
+    $tmpl = (string)($s['templates'][$event] ?? '');
+    if ($tmpl === '') return $fallback;
+    $out = $tmpl;
+    foreach ($vars as $k => $v) {
+        $out = str_replace('{' . $k . '}', (string)$v, $out);
+    }
+    return $out;
 }
