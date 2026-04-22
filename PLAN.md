@@ -5,7 +5,7 @@
 - ✅ **Phase 1 (stabilization):** regression checklist and end-to-end verification document exist in `docs/regression-checklist.md`.
 - ✅ **Phase 2 (project management):** project CRUD, archive/unarchive, and admin project settings UI are implemented.
 - ✅ **Phase 3 (labels/taxonomy):** label scope (global/project), duplicate protection by scope, usage-aware governance, merge/archive flows, typeahead label creation in task flows, and list-view bulk add/remove label operations are now implemented.
-- 🔄 **Phases 4–7:** partially implemented in codebase, but still planned for completion/hardening per sections below.
+- 🔄 **Phases 4–7:** now advanced with collaboration + reliability foundations in place (comment moderation, mention detection hooks, Slack retries/history/templates, saved views, bulk task updates, and calendar drag-to-reschedule), with additional hardening still planned below.
 
 This plan replaces the prior “known gaps only” scope with a full product upgrade roadmap focused on:
 
@@ -417,10 +417,10 @@ Snapshot based on current repository implementation.
 ### 14.2 Partially implemented / gaps to close
 
 - **No dedicated Admin/Settings UI yet** for projects, labels, users, Slack, and recurring rules; many features are API-capable but not first-class in product UX.
-- **Comment collaboration parity is incomplete** (edit/delete own comments, moderation, and @mentions are not complete end-to-end).
-- **Slack delivery reliability is basic**; we still need explicit retry/backoff policy definition, stronger diagnostics UI, and template customization.
+- **Comment collaboration parity is improving** (edit/delete own comments and moderation controls are now implemented; richer mention notification UX still needs dedicated surface-level polish).
+- **Slack delivery reliability has improved** with bounded retries, per-event delivery history capture, and template placeholders; diagnostics UX still needs a dedicated admin presentation layer.
 - **Workflow customization is not exposed** (project-specific statuses, required fields by transition, and task templates).
-- **Saved views, bulk operations, advanced reporting, and automation rules** are not yet implemented.
+- **Saved views and bulk operations are now partially implemented** (personal saved filter presets + bulk status/due/label actions). Advanced reporting and automation rules remain in backlog.
 - **Regression process is still mostly manual and not codified into a release gate checklist in-repo.**
 
 ### 14.3 Architectural constraints confirmed

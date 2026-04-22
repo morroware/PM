@@ -1,5 +1,5 @@
 // List / table view grouped by status/project/assignee.
-function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus, onBulkLabels }) {
+function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus, onBulkLabels, onBulkUpdate }) {
   const root = h('div', { style: { padding: '16px 20px' } });
   const state = { groupBy: 'status', sortBy: 'priority', collapsed: {}, selected: new Set() };
 
@@ -28,6 +28,20 @@ function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus, onBulkLabels
               .catch(err => toast(err.message || 'Bulk update failed', 'error'));
           }, close, { keepOpen: true }));
         } }, 'Remove label'),
+        h('button', { class: 'btn btn-ghost', style: { padding: '4px 8px', fontSize: '12px' }, onClick: async () => {
+          try {
+            await onBulkUpdate?.([...state.selected], { status: 'done' }, 'Marked done');
+            state.selected.clear(); redraw();
+          } catch (err) { toast(err.message || 'Bulk update failed', 'error'); }
+        } }, 'Mark done'),
+        h('button', { class: 'btn btn-ghost', style: { padding: '4px 8px', fontSize: '12px' }, onClick: async () => {
+          const raw = prompt('Set due date for selected tasks (YYYY-MM-DD). Leave blank to clear.');
+          if (raw == null) return;
+          try {
+            await onBulkUpdate?.([...state.selected], { due: raw.trim() || null }, 'Updated due date');
+            state.selected.clear(); redraw();
+          } catch (err) { toast(err.message || 'Bulk update failed', 'error'); }
+        } }, 'Set due'),
         h('button', { class: 'btn btn-ghost', style: { padding: '4px 8px', fontSize: '12px' }, onClick: () => { state.selected.clear(); redraw(); } }, 'Clear'),
       ) : null,
     ));

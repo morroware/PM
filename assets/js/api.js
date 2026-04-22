@@ -62,6 +62,9 @@ const API = {
 
   listComments(taskId)      { return this.get(`tasks.php?id=${taskId}&comments=1`); },
   addComment(taskId, body)  { return this.post(`tasks.php?id=${taskId}&comments=1`, { body }); },
+  updateComment(taskId, commentId, body) { return this.patch(`tasks.php?id=${taskId}&comments=1&comment_id=${commentId}`, { body }); },
+  deleteComment(taskId, commentId) { return this.del(`tasks.php?id=${taskId}&comments=1&comment_id=${commentId}`); },
+  bulkUpdateTasks(taskIds, patch) { return this.patch('tasks.php?bulk=1', { task_ids: taskIds, patch }); },
 
   // ---- projects ----
   listProjects(opts = {})   {
@@ -102,6 +105,10 @@ const API = {
   // ---- misc ----
   listActivity()            { return this.get('activity.php'); },
   listUsers()               { return this.get('users.php'); },
+  listSavedViews()          { return this.get('saved_views.php'); },
+  createSavedView(data)     { return this.post('saved_views.php', data); },
+  updateSavedView(id, data) { return this.patch(`saved_views.php?id=${id}`, data); },
+  deleteSavedView(id)       { return this.del(`saved_views.php?id=${id}`); },
 };
 
 window.API = API;

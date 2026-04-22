@@ -6,12 +6,20 @@ pm_require_auth();
 
 $id    = pm_int_param('id');
 $subId = pm_int_param('subtask_id');
+$commentId = pm_int_param('comment_id');
 $method = pm_method();
+
+if (isset($_GET['bulk'])) {
+    if ($method === 'PATCH') pm_bulk_update_tasks();
+    pm_error('Method not allowed', 405);
+}
 
 // Sub-routes
 if ($id !== null && isset($_GET['comments'])) {
     if ($method === 'GET')  pm_list_comments($id);
     if ($method === 'POST') pm_add_comment($id);
+    if ($method === 'PATCH' && $commentId !== null) pm_update_comment($id, $commentId);
+    if ($method === 'DELETE' && $commentId !== null) pm_delete_comment($id, $commentId);
     pm_error('Method not allowed', 405);
 }
 
@@ -362,6 +370,7 @@ function pm_comment_shape(array $r): array {
         'id'         => (int)$r['id'],
         'body'       => $r['body'],
         'created_at' => $r['created_at'],
+        'updated_at' => $r['updated_at'] ?? null,
         'user'       => [
             'id'       => $r['user_id'] !== null ? (int)$r['user_id'] : null,
             'name'     => $r['name']     ?? 'Former teammate',
@@ -373,7 +382,7 @@ function pm_comment_shape(array $r): array {
 
 function pm_list_comments(int $taskId): void {
     $rows = pm_fetch_all(
-        'SELECT c.id, c.body, c.created_at, c.user_id, u.name, u.initials, u.color
+        'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
          FROM comments c LEFT JOIN users u ON u.id = c.user_id
          WHERE c.task_id = ? ORDER BY c.id ASC',
         [$taskId]
@@ -389,7 +398,7 @@ function pm_add_comment(int $taskId): void {
     pm_log_activity(pm_current_user_id(), $taskId, 'commented', mb_substr($body, 0, 200));
     $cid = pm_last_id();
     $r = pm_fetch_one(
-        'SELECT c.id, c.body, c.created_at, c.user_id, u.name, u.initials, u.color
+        'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
          FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?',
         [$cid]
     );
@@ -397,8 +406,111 @@ function pm_add_comment(int $taskId): void {
     if ($task) {
         $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$task['project_id']]);
         pm_slack_notify_task_event($task, $proj, 'comment_added', 'commented', $body);
+        pm_notify_mentions($task, $proj, $body);
     }
     pm_json(['comment' => pm_comment_shape($r)]);
+}
+
+function pm_update_comment(int $taskId, int $commentId): void {
+    $comment = pm_fetch_one('SELECT * FROM comments WHERE id = ? AND task_id = ?', [$commentId, $taskId]);
+    if (!$comment) pm_error('Comment not found', 404);
+    $me = pm_current_user();
+    $isOwner = (int)($comment['user_id'] ?? 0) === (int)($me['id'] ?? 0);
+    if (!$isOwner && empty($me['is_admin'])) pm_error('Not allowed', 403);
+    $body = trim((string)pm_param('body', ''));
+    if ($body === '') pm_error('Empty comment');
+    pm_exec('UPDATE comments SET body = ?, updated_at = NOW() WHERE id = ? AND task_id = ?', [$body, $commentId, $taskId]);
+    $r = pm_fetch_one(
+        'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
+         FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ? AND c.task_id = ?',
+        [$commentId, $taskId]
+    );
+    $task = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if ($task) {
+        $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$task['project_id']]);
+        pm_notify_mentions($task, $proj, $body);
+    }
+    pm_json(['comment' => pm_comment_shape($r)]);
+}
+
+function pm_delete_comment(int $taskId, int $commentId): void {
+    $comment = pm_fetch_one('SELECT * FROM comments WHERE id = ? AND task_id = ?', [$commentId, $taskId]);
+    if (!$comment) pm_error('Comment not found', 404);
+    $me = pm_current_user();
+    $isOwner = (int)($comment['user_id'] ?? 0) === (int)($me['id'] ?? 0);
+    if (!$isOwner && empty($me['is_admin'])) pm_error('Not allowed', 403);
+    pm_exec('DELETE FROM comments WHERE id = ? AND task_id = ?', [$commentId, $taskId]);
+    pm_json(['ok' => true]);
+}
+
+function pm_notify_mentions(array $task, ?array $project, string $text): void {
+    preg_match_all('/@([A-Za-z0-9._-]{2,80})/', $text, $m);
+    $names = array_values(array_unique($m[1] ?? []));
+    if (!$names) return;
+    $hits = [];
+    foreach ($names as $n) {
+        $row = pm_fetch_one('SELECT id, name FROM users WHERE LOWER(name) = LOWER(?) OR LOWER(initials) = LOWER(?)', [$n, $n]);
+        if ($row) $hits[] = $row;
+    }
+    if (!$hits) return;
+    $actor = pm_current_user();
+    $who = $actor['name'] ?? 'Someone';
+    $mentioned = implode(', ', array_map(fn($u) => $u['name'], $hits));
+    pm_log_activity(pm_current_user_id(), (int)$task['id'], 'mention', "{$who} mentioned {$mentioned}");
+    if (!pm_slack_event_on('mention_added')) return;
+    $channel = pm_slack_channel_for_project($project);
+    if ($channel === '') return;
+    $msg = pm_slack_format_task($task, "mentioned {$mentioned}", $actor, $project, $text);
+    pm_slack_post($channel, $msg, ['event_key' => 'mention_added']);
+}
+
+function pm_bulk_update_tasks(): void {
+    $me = pm_current_user();
+    if (empty($me['is_admin'])) pm_error('Admin only', 403);
+    $body = pm_body();
+    $ids = array_values(array_unique(array_map('intval', (array)($body['task_ids'] ?? []))));
+    if (!$ids) pm_error('task_ids required');
+    $patch = is_array($body['patch'] ?? null) ? $body['patch'] : [];
+    if (!$patch) pm_error('patch required');
+    $updated = 0;
+    foreach ($ids as $id) {
+        $task = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$id]);
+        if (!$task) continue;
+        $fields = [];
+        $params = [];
+        foreach (['title','description','status','estimate','due'] as $col) {
+            if (array_key_exists($col, $patch)) {
+                $fields[] = "$col = ?";
+                $params[] = $patch[$col] === '' ? null : $patch[$col];
+            }
+        }
+        if (array_key_exists('priority', $patch)) {
+            $fields[] = 'priority = ?';
+            $params[] = (int)$patch['priority'];
+        }
+        if (array_key_exists('project', $patch)) {
+            $fields[] = 'project_id = ?';
+            $params[] = (int)$patch['project'];
+        }
+        if ($fields) {
+            $params[] = $id;
+            pm_exec('UPDATE tasks SET ' . implode(', ', $fields) . ' WHERE id = ?', $params);
+        }
+        if (array_key_exists('labels', $patch) && is_array($patch['labels'])) {
+            $labelProject = array_key_exists('project', $patch) ? (int)$patch['project'] : (int)$task['project_id'];
+            $valid = pm_validate_label_ids_for_project($patch['labels'], $labelProject);
+            pm_exec('DELETE FROM task_labels WHERE task_id = ?', [$id]);
+            foreach ($valid as $lid) pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$id, (int)$lid]);
+        }
+        if (array_key_exists('assignees', $patch) && is_array($patch['assignees'])) {
+            pm_exec('DELETE FROM task_assignees WHERE task_id = ?', [$id]);
+            foreach ($patch['assignees'] as $uid) {
+                pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$id, (int)$uid]);
+            }
+        }
+        $updated++;
+    }
+    pm_json(['ok' => true, 'updated' => $updated]);
 }
 
 function pm_log_activity(int $uid, ?int $taskId, string $action, ?string $detail = null): void {
@@ -415,8 +527,16 @@ function pm_slack_notify_task_event(array $task, ?array $project, string $event,
         $channel = pm_slack_channel_for_project($project);
         if ($channel === '') return;
         $actor = pm_current_user();
-        $text  = pm_slack_format_task($task, $verb, $actor, $project, $extra);
-        pm_slack_post($channel, $text);
+        $fallback  = pm_slack_format_task($task, $verb, $actor, $project, $extra);
+        $text = pm_slack_render_event_text($event, [
+            'project' => $project['name'] ?? '',
+            'ref' => $task['ref'] ?? ('#' . (int)$task['id']),
+            'title' => $task['title'] ?? '',
+            'actor' => $actor['name'] ?? 'Someone',
+            'verb' => $verb,
+            'extra' => $extra ?? '',
+        ], $fallback);
+        pm_slack_post($channel, $text, ['event_key' => $event]);
     } catch (Throwable $_) { /* silent */ }
 }
 

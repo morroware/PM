@@ -119,7 +119,9 @@ append `?v=2` (and bump the number) to the `<script>` / `<link>` tags in
 - **Task detail drawer** with inline-editable title/description/due/priority/
   status/assignees/labels/estimate, subtasks, and comments.
 - **Filters**: project / assignee / labels, plus global search (`Ctrl+K`).
+- **Saved views + bulk actions**: save personal filter presets and run list-view bulk updates (labels, status, due date).
 - **Shortcuts**: `Ctrl+K` search, `Ctrl+N` new task.
+- **Collaboration upgrades**: comment edit/delete (owner or admin moderation), @mention detection hooks, and richer Slack delivery diagnostics/retries.
 - **Persistence**: view + project filter remembered in `localStorage`.
 
 ## Known gaps

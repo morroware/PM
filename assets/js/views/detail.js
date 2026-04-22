@@ -297,14 +297,38 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
     const list = h('div', { style: { display: 'grid', gap: '10px' } });
     if (comments) {
       for (const c of comments) {
+        const canModerate = (window.state.me?.is_admin) || (c.user?.id === window.state.me?.id);
+        const bodyEl = h('div', { style: { fontSize: '13px', color: 'var(--fg-1)', marginTop: '4px', whiteSpace: 'pre-wrap' } }, c.body);
         list.appendChild(h('div', { style: { display: 'flex', gap: '10px' } },
           Avatar(c.user, 28),
           h('div', { style: { flex: 1 } },
-            h('div', { style: { fontSize: '12.5px', color: 'var(--fg-1)' } },
+            h('div', { style: { fontSize: '12.5px', color: 'var(--fg-1)', display: 'flex', alignItems: 'center', gap: '6px' } },
               h('span', { style: { fontWeight: 600 } }, c.user.name),
-              ' ',
-              h('span', { style: { color: 'var(--fg-3)', fontSize: '11.5px' } }, relTime(c.created_at))),
-            h('div', { style: { fontSize: '13px', color: 'var(--fg-1)', marginTop: '4px', whiteSpace: 'pre-wrap' } }, c.body),
+              h('span', { style: { color: 'var(--fg-3)', fontSize: '11.5px' } }, relTime(c.created_at)),
+              c.updated_at ? h('span', { style: { color: 'var(--fg-4)', fontSize: '10.5px' } }, '(edited)') : null,
+              canModerate ? h('button', { class: 'btn btn-ghost', style: { marginLeft: 'auto', fontSize: '11px', padding: '2px 6px' }, onClick: async () => {
+                const next = prompt('Edit comment', c.body);
+                if (next == null) return;
+                if (!next.trim()) return toast('Comment cannot be empty', 'error');
+                try {
+                  const r = await API.updateComment(task.id, c.id, next.trim());
+                  const idx = comments.findIndex(x => x.id === c.id);
+                  if (idx >= 0) comments[idx] = r.comment;
+                  window._pmCommentsCache[task.id] = comments;
+                  redraw();
+                } catch (e) { toast(e.message, 'error'); }
+              } }, 'Edit') : null,
+              canModerate ? h('button', { class: 'btn btn-ghost', style: { fontSize: '11px', padding: '2px 6px' }, onClick: async () => {
+                if (!confirm('Delete this comment?')) return;
+                try {
+                  await API.deleteComment(task.id, c.id);
+                  comments = comments.filter(x => x.id !== c.id);
+                  window._pmCommentsCache[task.id] = comments;
+                  redraw();
+                } catch (e) { toast(e.message, 'error'); }
+              } }, 'Delete') : null,
+            ),
+            bodyEl,
           ),
         ));
       }

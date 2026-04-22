@@ -18,6 +18,8 @@ function pm_slack_public_shape(array $s): array {
         'token_preview'   => $token === '' ? '' : (substr($token, 0, 8) . '…' . substr($token, -4)),
         'default_channel' => $s['default_channel'] ?? '',
         'events'          => $s['events'] ?? [],
+        'templates'       => $s['templates'] ?? [],
+        'delivery_history'=> $s['delivery_history'] ?? [],
         'last_ok_at'      => $s['last_ok_at'] ?? null,
         'last_error'      => $s['last_error'] ?? null,
         'last_error_at'   => $s['last_error_at'] ?? null,
@@ -48,9 +50,16 @@ if ($method === 'POST') {
             $s['bot_token'] = $tok;
         }
         if (isset($body['events']) && is_array($body['events'])) {
-            foreach (['task_completed','task_created','task_assigned','comment_added','project_archived'] as $k) {
+            foreach (['task_completed','task_created','task_assigned','comment_added','project_archived','mention_added'] as $k) {
                 if (array_key_exists($k, $body['events'])) {
                     $s['events'][$k] = !empty($body['events'][$k]);
+                }
+            }
+        }
+        if (isset($body['templates']) && is_array($body['templates'])) {
+            foreach (['task_completed','task_created','task_assigned','comment_added','project_archived','mention_added'] as $k) {
+                if (array_key_exists($k, $body['templates'])) {
+                    $s['templates'][$k] = mb_substr(trim((string)$body['templates'][$k]), 0, 500);
                 }
             }
         }

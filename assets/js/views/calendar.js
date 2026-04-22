@@ -1,5 +1,5 @@
 // Month calendar view.
-function renderCalendar(tasks, { onOpenTask }) {
+function renderCalendar(tasks, { onOpenTask, onMoveTaskDate }) {
   const state = { cursor: (() => { const d = today(); d.setDate(1); return d; })() };
   const root = h('div', { style: { padding: '20px', height: '100%', display: 'flex', flexDirection: 'column' } });
 
@@ -40,6 +40,17 @@ function renderCalendar(tasks, { onOpenTask }) {
       const dayTasks = tasksByDate[iso] || [];
       const isToday = iso === todayISO;
       const cell = h('div', { class: 'cal-cell' + (c.inMonth ? '' : ' not-in-month') + (i >= 35 ? ' last-row' : '') });
+      cell.addEventListener('dragover', e => e.preventDefault());
+      cell.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        const tid = Number(e.dataTransfer.getData('text/task-id') || 0);
+        if (!tid) return;
+        try {
+          await onMoveTaskDate?.(tid, iso);
+        } catch (err) {
+          toast(err.message || 'Could not reschedule task', 'error');
+        }
+      });
       cell.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' } },
         h('span', { class: 'cal-daynum' + (isToday ? ' today' : '') }, String(c.date.getDate())),
       ));
@@ -48,11 +59,13 @@ function renderCalendar(tasks, { onOpenTask }) {
         const done = t.status === 'done';
         return h('div', {
           class: 'cal-event' + (done ? ' done' : ''),
+          draggable: true,
           title: t.title + (t.comments ? ` · ${t.comments} comment${t.comments === 1 ? '' : 's'}` : ''),
           style: proj ? {
             background: proj.color + '18', color: proj.color,
             borderLeft: '2px solid ' + proj.color
           } : {},
+          onDragstart: (e) => { e.dataTransfer.setData('text/task-id', String(t.id)); e.dataTransfer.effectAllowed = 'move'; },
           onClick: (e) => { e.stopPropagation(); onOpenTask(t.id); },
         },
           h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } }, t.title),
