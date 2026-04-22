@@ -1,88 +1,124 @@
-# Project Manager — cPanel-friendly build
+# Project Manager (Castle Tech Tasks)
 
-A multi-user project/task manager (Kanban / List / Calendar / Dashboard / My-Tasks).
-Designed to run on any shared **cPanel** host with **PHP 8+** and **MySQL / MariaDB**
-— no shell access, no Node.js, no Composer, no build step.
+A cPanel-friendly, multi-user project/task manager with a modern UI and a zero-build deployment model.
 
-The UI matches the [original mockup](design/Castle%20Tech%20Tasks.html) from
-Claude Design (preserved under `design/` for reference), reimplemented as
-vanilla HTML/CSS/JavaScript on top of a small PHP + PDO backend.
+This repository is designed for shared hosting environments where you have **PHP + MySQL** but **no shell access**, **no Node.js**, and **no Composer**. Everything is plain HTML/CSS/JavaScript on the frontend and plain PHP + PDO on the backend.
 
-## Stack
+---
 
-| Layer    | What                                                     |
-|----------|----------------------------------------------------------|
-| Frontend | Vanilla ES-2020 JavaScript, plain CSS (custom property tokens), inline SVG icons. Loaded from `<script src>` — no bundler. |
-| Backend  | Plain PHP files, one per resource, using PDO. Sessions for auth. |
-| Database | MySQL / MariaDB (any version shipped with cPanel for the last ~10 years). |
-| Fonts    | Google Fonts CDN (`Inter`, `JetBrains Mono`) — swap to local if you're offline. |
+## Table of contents
 
-## Deploy to cPanel in 5 steps (no shell needed)
+1. [What this app does](#what-this-app-does)
+2. [Key capabilities](#key-capabilities)
+3. [Tech stack and architecture](#tech-stack-and-architecture)
+4. [Repository structure](#repository-structure)
+5. [Requirements](#requirements)
+6. [Installation and first-run setup (cPanel)](#installation-and-first-run-setup-cpanel)
+7. [Configuration reference](#configuration-reference)
+8. [Authentication and authorization model](#authentication-and-authorization-model)
+9. [API reference](#api-reference)
+10. [Database schema](#database-schema)
+11. [Frontend behavior and UX notes](#frontend-behavior-and-ux-notes)
+12. [Operations: backup, update, and maintenance](#operations-backup-update-and-maintenance)
+13. [Troubleshooting](#troubleshooting)
+14. [Security notes](#security-notes)
+15. [Known gaps / roadmap](#known-gaps--roadmap)
+16. [Local development (optional)](#local-development-optional)
 
-1. **Create a MySQL database + user.**
-   In cPanel → **MySQL Databases**: add a new DB (e.g. `cpaneluser_pm`), add a
-   new user, set a strong password, and grant **ALL PRIVILEGES** on that DB.
+---
 
-2. **Upload files.**
-   In cPanel → **File Manager**, go into `public_html` (or a subdirectory like
-   `public_html/pm/`). Either:
-   - **Drag & drop** the contents of this repository (everything except
-     `design/`, `README.md`, and the `.git/` folder) into that directory, **or**
-   - Compress this repo locally into a zip, upload the zip, then right-click →
-     **Extract**.
+## What this app does
 
-3. **Edit `api/config.php`.**
-   Right-click → **Edit** in File Manager. Fill in `db_name`, `db_user`,
-   `db_pass` with the values from step 1. Save.
+Project Manager is a browser-based collaboration app for small teams. It supports:
 
-4. **Run the installer.**
-   Visit `https://yourdomain.com/pm/install.php` (adjust the path).
-   - Click **Run install** to create tables + seed projects/labels.
-   - Fill out the form to create your **first admin user**.
+- multi-user sign in
+- task tracking across multiple projects
+- kanban/list/calendar/checklist/dashboard views
+- assignees, labels, subtasks, comments, due dates, priorities, and estimates
+- activity feed and profile management
 
-5. **Delete `install.php`** from File Manager, then go to
-   `https://yourdomain.com/pm/login.html` and sign in. Done.
+It is intentionally implemented with a small backend and static frontend files so it can be uploaded directly via cPanel File Manager.
 
-## Post-install: adding teammates
+---
 
-By default, public registration is **off**. Two ways to add more users:
+## Key capabilities
 
-- **Flip the flag temporarily.** Edit `api/config.php` and set
-  `'allow_public_register' => true`. Share `register.html` with your team,
-  then turn it back off once everyone is in.
-- **Create from the admin session.** While logged in as admin, POST to
-  `api/auth.php?action=register` with `{name, email, password, role}`. A
-  proper admin UI for this is a natural next improvement.
+- **Views:** Dashboard, Kanban, List, My Tasks checklist, Calendar.
+- **Task model:** title, description, project, status, priority, due date, estimate, assignees, labels, subtasks, comments.
+- **Navigation & productivity:** quick add, global search (`Ctrl/Cmd + K`), new task shortcut (`Ctrl/Cmd + N`).
+- **Auth:** session-based login/logout, optional self-serve registration gate, admin controls.
+- **Admin APIs:** manage users, projects, and labels.
+- **Activity tracking:** mutation events are logged and shown in the dashboard feed.
 
-## File layout
+---
 
-```
-/                       ← upload the contents of this directory to cPanel
-├── index.html          ← main app (after login)
-├── login.html          ← sign-in page
-├── register.html       ← self-serve registration (gated by config)
-├── install.php         ← one-time setup; DELETE after running
-├── .htaccess           ← sets index.html as default, hides dotfiles
+## Tech stack and architecture
+
+### Frontend
+
+- Vanilla JavaScript (ES2020 style, no framework)
+- Plain CSS with token-like custom properties
+- Inline SVG icon helpers
+- Static HTML entry points:
+  - `index.html` (main app)
+  - `login.html`
+  - `register.html`
+
+### Backend
+
+- PHP 8+
+- PDO for database access
+- JSON-only API endpoints in `api/*.php`
+- Session/cookie-based auth
+
+### Database
+
+- MySQL / MariaDB
+- Schema bootstrapped via `install.php`
+- Uses foreign keys and indexed join tables for relationships
+
+### Request flow at a glance
+
+1. Browser loads static HTML/JS/CSS.
+2. `assets/js/app.js` checks `auth.php?action=me`.
+3. On success, frontend bootstraps projects/labels/users/tasks.
+4. UI actions call API endpoints (`tasks.php`, `projects.php`, etc.).
+5. Backend validates auth/role, mutates DB via prepared statements, returns JSON.
+
+---
+
+## Repository structure
+
+```text
+.
+├── .htaccess
+├── README.md
+├── PLAN.md
+├── CLAUDE.md
+├── index.html
+├── login.html
+├── register.html
+├── install.php
 ├── api/
-│   ├── config.php      ← edit this with your MySQL credentials
-│   ├── db.php          ← PDO connection helpers
-│   ├── bootstrap.php   ← session + JSON helpers + auth guards
-│   ├── auth.php        ← login / logout / register / me / update_profile
-│   ├── tasks.php       ← task + subtask + comment CRUD
-│   ├── projects.php    ← project CRUD (admin-only for writes)
-│   ├── labels.php      ← label CRUD
-│   ├── users.php       ← list / patch / delete team members
-│   ├── activity.php    ← recent activity feed
-│   └── .htaccess       ← denies direct access to config.php
+│   ├── .htaccess
+│   ├── config.php
+│   ├── bootstrap.php
+│   ├── db.php
+│   ├── auth.php
+│   ├── tasks.php
+│   ├── projects.php
+│   ├── labels.php
+│   ├── users.php
+│   └── activity.php
 ├── assets/
 │   ├── css/
-│   │   ├── app.css     ← all app styling (token-based)
-│   │   └── auth.css    ← login / register page styles
+│   │   ├── app.css
+│   │   └── auth.css
 │   └── js/
-│       ├── api.js      ← fetch wrapper
-│       ├── icons.js    ← Lucide-style inline SVGs
-│       ├── ui.js       ← h() helper + avatars, tags, popovers, pickers
-│       ├── app.js      ← shell: sidebar, topbar, filters, quick-add
+│       ├── api.js
+│       ├── app.js
+│       ├── icons.js
+│       ├── ui.js
 │       └── views/
 │           ├── dashboard.js
 │           ├── kanban.js
@@ -90,42 +126,337 @@ By default, public registration is **off**. Two ways to add more users:
 │           ├── checklist.js
 │           ├── calendar.js
 │           └── detail.js
-└── design/             ← original Claude Design mockup (reference only)
+└── design/
+    ├── Castle Tech Tasks.html
+    └── src/
 ```
 
-## Updating the app later
+`design/` is reference material for the original mockup and is not required for runtime.
 
-There's no build step, so editing a file in File Manager takes effect
-immediately. Your browser may cache JS and CSS — hard-reload with
-`Ctrl+Shift+R` (or `Cmd+Shift+R` on Mac). For production cache-busting,
-append `?v=2` (and bump the number) to the `<script>` / `<link>` tags in
-`index.html`, `login.html`, and `register.html`.
+---
+
+## Requirements
+
+- PHP **8.0+** (shared-host compatible)
+- MySQL or MariaDB database
+- cPanel (or equivalent) file upload access
+- Apache with `.htaccess` enabled (recommended)
+- HTTPS strongly recommended in production
+
+No Node, no Composer, no CLI tools required for deployment.
+
+---
+
+## Installation and first-run setup (cPanel)
+
+### 1) Create DB + DB user
+
+In cPanel:
+
+- open **MySQL Databases**
+- create a DB (example: `cpaneluser_pm`)
+- create a DB user
+- grant **ALL PRIVILEGES** for that user on the DB
+
+### 2) Upload project files
+
+Upload repository contents into `public_html/` (or a subdirectory such as `public_html/pm/`).
+
+Recommended: upload everything except non-runtime files (`design/`, `.git/`).
+
+### 3) Configure credentials
+
+Edit `api/config.php`:
+
+- `db_name`
+- `db_user`
+- `db_pass`
+- optionally `cookie_secure` (set true once HTTPS is enforced)
+
+### 4) Run installer
+
+Visit:
+
+- `https://your-domain.com/pm/install.php`
+
+Then:
+
+- click **Run install** to create tables + seed defaults
+- create your first admin account in installer form
+
+### 5) Remove installer
+
+Delete `install.php` after setup.
+
+Then log in at:
+
+- `https://your-domain.com/pm/login.html`
+
+---
+
+## Configuration reference
+
+`api/config.php` keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `db_host` | string | DB host (usually `localhost` on cPanel). |
+| `db_name` | string | Database name. |
+| `db_user` | string | Database username. |
+| `db_pass` | string | Database password. |
+| `db_charset` | string | Charset (default `utf8mb4`). |
+| `session_name` | string | Session cookie name. |
+| `cookie_secure` | bool | Set `true` when serving over HTTPS only. |
+| `cookie_samesite` | string | SameSite mode (`Lax` by default). |
+| `allow_public_register` | bool | If `true`, anyone can register from `register.html`. |
+| `app_name` | string | Display/application label. |
+| `project_key` | string | Fallback task ref prefix. |
+
+---
+
+## Authentication and authorization model
+
+### Sessions
+
+- Auth is handled with PHP sessions.
+- Session cookie is HttpOnly and configured in bootstrap.
+- Login stores `$_SESSION['uid']`.
+- Logout clears session and cookie.
+
+### Roles
+
+- `is_admin = 1` users are administrators.
+- Admin-only operations include:
+  - create/update/delete projects
+  - create/update/delete labels
+  - patch/delete users
+  - create users when public registration is disabled
+
+### Registration modes
+
+- **Public registration off (default):** only admins can register new users through API.
+- **Public registration on:** `register.html` can create accounts without admin session.
+
+---
+
+## API reference
+
+Base path: `api/`
+
+All endpoints return JSON. Errors are shaped as `{ "error": "..." }` with proper HTTP status.
+
+### `auth.php`
+
+Action via query parameter `?action=...`:
+
+- `GET auth.php?action=me`
+  - returns current user (or null) + registration flag
+- `POST auth.php?action=login`
+  - body: `{ email, password }`
+- `POST auth.php?action=logout`
+- `POST auth.php?action=register`
+  - body: `{ name, email, password, role }`
+- `POST auth.php?action=update_profile`
+  - body: `{ name, role, color, password?, current_password? }`
+
+### `tasks.php`
+
+- `GET tasks.php`
+  - list tasks with labels, assignees, subtasks, comment counts
+- `POST tasks.php`
+  - create task
+- `GET tasks.php?id={id}`
+  - single task
+- `PATCH tasks.php?id={id}`
+  - patch mutable fields
+- `DELETE tasks.php?id={id}`
+
+Subtasks:
+
+- `POST tasks.php?id={taskId}&subtasks=1`
+- `PATCH tasks.php?id={taskId}&subtask_id={subtaskId}`
+- `DELETE tasks.php?id={taskId}&subtask_id={subtaskId}`
+
+Comments:
+
+- `GET tasks.php?id={taskId}&comments=1`
+- `POST tasks.php?id={taskId}&comments=1`
+
+### `projects.php`
+
+- `GET projects.php`
+- `POST projects.php` (admin)
+- `PATCH projects.php?id={id}` (admin)
+- `DELETE projects.php?id={id}` (admin)
+
+### `labels.php`
+
+- `GET labels.php`
+- `POST labels.php` (admin)
+- `PATCH labels.php?id={id}` (admin)
+- `DELETE labels.php?id={id}` (admin)
+
+Allowed label colors are constrained to:
+`red, blue, amber, green, violet, slate, pink, cyan`.
+
+### `users.php`
+
+- `GET users.php`
+- `PATCH users.php?id={id}` (admin)
+- `DELETE users.php?id={id}` (admin, cannot delete self)
+
+### `activity.php`
+
+- `GET activity.php`
+  - returns latest activity entries joined with user/task context
+
+---
+
+## Database schema
+
+Created by `install.php`.
+
+### Tables
+
+- `users`
+- `projects`
+- `labels`
+- `tasks`
+- `subtasks`
+- `task_assignees` (many-to-many)
+- `task_labels` (many-to-many)
+- `comments`
+- `activity`
+
+### Data relationships
+
+- `tasks.project_id -> projects.id`
+- `subtasks.task_id -> tasks.id`
+- `task_assignees.task_id -> tasks.id`
+- `task_assignees.user_id -> users.id`
+- `task_labels.task_id -> tasks.id`
+- `task_labels.label_id -> labels.id`
+- `comments.task_id -> tasks.id`
+- `comments.user_id -> users.id` (nullable, `ON DELETE SET NULL`)
+
+### Seeded defaults
+
+Installer seeds:
+
+- 5 sample projects
+- 8 labels matching supported UI color names
+
+---
+
+## Frontend behavior and UX notes
+
+- Boot process fetches me/projects/labels/users/tasks in parallel.
+- Last-selected view is stored in `localStorage` (`pm_view`).
+- Current project filter is persisted (`pm_project`).
+- Task drawer can be deep-linked via hash (`#task=<id>`).
+- Activity feed refresh is debounced after mutations.
+- API wrapper in `assets/js/api.js` normalizes error handling.
+
+---
+
+## Operations: backup, update, and maintenance
+
+### Backup strategy
+
+Minimum recommended routine:
+
+1. database dump via hosting panel
+2. copy of deployed files (`public_html/pm`)
+3. secure copy of `api/config.php`
+
+### Updating app code
+
+Because there is no build step:
+
+1. replace changed files in File Manager (or upload zip + extract)
+2. hard refresh browser (`Ctrl/Cmd + Shift + R`)
+3. optionally version-bust script/link URLs in HTML (e.g. `app.js?v=2`)
+
+### Re-running installer safely
+
+- `install.php` uses `CREATE TABLE IF NOT EXISTS` and can be re-run for idempotent schema creation.
+- It includes a guard to prevent unauthorized reinstallation once an admin exists.
+
+---
+
+## Troubleshooting
+
+### “Cannot connect to DB” in installer
+
+- verify `db_host`, `db_name`, `db_user`, `db_pass` in `api/config.php`
+- ensure DB user has privileges on the selected DB
+
+### Login fails with correct credentials
+
+- verify account exists in `users`
+- confirm password length/creation path met requirements
+- clear cookies/session and retry
+
+### API returns 401 from app
+
+- session expired or cookie blocked
+- confirm same-origin deployment and HTTPS settings
+- check `cookie_secure` is not true on non-HTTPS site
+
+### Changes not visible after upload
+
+- browser cache is stale
+- force hard refresh
+
+### Register page says registration disabled
+
+- set `allow_public_register` to `true` temporarily, then revert to `false`
+
+---
 
 ## Security notes
 
-- Sessions use an HttpOnly cookie. Set `cookie_secure` to `true` in
-  `api/config.php` once your site is HTTPS-only.
-- Passwords are bcrypt-hashed via `password_hash(PASSWORD_DEFAULT)`.
-- All DB access goes through PDO prepared statements.
-- `api/.htaccess` denies direct HTTP access to `api/config.php` — don't
-  remove this file.
-- Admin-only endpoints (creating projects/labels, changing another user's
-  role, deleting users) check `is_admin` server-side.
+- Passwords are hashed with PHP `password_hash()` and verified with `password_verify()`.
+- SQL calls use prepared statements through PDO helpers.
+- Session cookie uses HttpOnly and configurable `SameSite`/secure attributes.
+- `api/.htaccess` denies direct access to `api/config.php`.
+- Keep `install.php` deleted after setup.
+- Enforce HTTPS and set `cookie_secure = true` in production.
 
-## Features
+---
 
-- **Five views**: Dashboard (stats, workload, activity), Kanban (drag-drop),
-  List (groupable + sortable), My-Tasks checklist, Month Calendar.
-- **Task detail drawer** with inline-editable title/description/due/priority/
-  status/assignees/labels/estimate, subtasks, and comments.
-- **Filters**: project / assignee / labels, plus global search (`Ctrl+K`).
-- **Shortcuts**: `Ctrl+K` search, `Ctrl+N` new task.
-- **Persistence**: view + project filter remembered in `localStorage`.
+## Known gaps / roadmap
 
-## Known gaps
+Current intentionally missing features (documented in `PLAN.md`):
 
-- No file attachments. Straightforward to add: a `uploads/` directory and a
-  small PHP endpoint. Skipped here to keep security surface minimal.
-- No real-time updates. Reload or switch views to see changes from other
-  users; polling or SSE would be an easy follow-up.
-- Admin UI for user / project / label management is API-only for now.
+1. file attachments
+2. real-time multi-client updates
+3. dedicated admin UI screens for users/projects/labels
+
+Implementation guidance for these features is already drafted in `PLAN.md`.
+
+---
+
+## Local development (optional)
+
+If you do have shell access, you can run a local PHP server for quick testing:
+
+```bash
+php -S 127.0.0.1:8000
+```
+
+Then open:
+
+- `http://127.0.0.1:8000/install.php` (first run)
+- `http://127.0.0.1:8000/login.html`
+
+You still need a reachable MySQL/MariaDB database configured in `api/config.php`.
+
+---
+
+If you want, I can also add:
+
+- an ER diagram section (ASCII + Mermaid)
+- sample `curl` commands for every endpoint
+- a migration/versioning checklist for future releases
+- a short admin runbook for onboarding/offboarding teammates
