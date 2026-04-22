@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/slack_client.php';
 pm_boot();
 pm_require_auth();
 
@@ -51,6 +52,8 @@ function pm_task_base_shape(array $t): array {
         'priority'    => (int)$t['priority'],
         'due'         => $t['due'],
         'estimate'    => $t['estimate'],
+        'recurring_rule_id' => isset($t['recurring_rule_id']) && $t['recurring_rule_id'] !== null
+            ? (int)$t['recurring_rule_id'] : null,
         'labels'      => [],
         'assignees'   => [],
         'subtasks'    => [],
@@ -192,6 +195,7 @@ function pm_create_task(): void {
         pm_error('Failed to attach task metadata: ' . $e->getMessage(), 500);
     }
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$tid]);
+    pm_slack_notify_task_event($t, $proj, 'task_created', 'created this task');
     pm_json(['task' => pm_task_row_to_shape($t)]);
 }
 
@@ -243,6 +247,16 @@ function pm_update_task(int $id): void {
     }
 
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$id]);
+
+    // Fire Slack + recurring-generation side effects once the write is stable.
+    if (isset($body['status']) && $body['status'] === 'done' && $t['status'] === 'done') {
+        $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$t['project_id']]);
+        pm_slack_notify_task_event($t, $proj, 'task_completed', 'marked this task done');
+        if (!empty($t['recurring_rule_id'])) {
+            pm_generate_next_recurring_task((int)$t['recurring_rule_id']);
+        }
+    }
+
     pm_json(['task' => pm_task_row_to_shape($t)]);
 }
 
@@ -332,10 +346,116 @@ function pm_add_comment(int $taskId): void {
          FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?',
         [$cid]
     );
+    $task = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
+    if ($task) {
+        $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$task['project_id']]);
+        pm_slack_notify_task_event($task, $proj, 'comment_added', 'commented', $body);
+    }
     pm_json(['comment' => pm_comment_shape($r)]);
 }
 
 function pm_log_activity(int $uid, ?int $taskId, string $action, ?string $detail = null): void {
     pm_exec('INSERT INTO activity (user_id, task_id, action, detail) VALUES (?,?,?,?)',
         [$uid, $taskId, $action, $detail]);
+}
+
+// Best-effort Slack notification. Never bubbles errors up: the request-level
+// write has already succeeded at this point, and a Slack outage shouldn't
+// turn a successful save into a 500.
+function pm_slack_notify_task_event(array $task, ?array $project, string $event, string $verb, ?string $extra = null): void {
+    try {
+        if (!pm_slack_event_on($event)) return;
+        $channel = pm_slack_channel_for_project($project);
+        if ($channel === '') return;
+        $actor = pm_current_user();
+        $text  = pm_slack_format_task($task, $verb, $actor, $project, $extra);
+        pm_slack_post($channel, $text);
+    } catch (Throwable $_) { /* silent */ }
+}
+
+// When a task tied to a recurring rule is completed, spawn the next instance.
+// Missed runs (rule.next_run in the past) are "caught up" to today so we don't
+// create a pile of back-dated tasks the moment someone finally checks in.
+function pm_generate_next_recurring_task(int $ruleId): void {
+    try {
+        $rule = pm_fetch_one('SELECT * FROM recurring_rules WHERE id = ?', [$ruleId]);
+        if (!$rule) return;
+        if (!empty($rule['paused'])) return;
+
+        // Decide the date we'll schedule on.
+        require_once __DIR__ . '/recurring.php';
+        $base = $rule['next_run'] ?: date('Y-m-d');
+        // If base is in the past, advance until it's >= today.
+        $today = date('Y-m-d');
+        while ($base < $today) {
+            $base = pm_recurring_next_date($base, $rule);
+        }
+        $scheduleFor = $base;
+        $nextAfter   = pm_recurring_next_date($scheduleFor, $rule);
+
+        // End conditions: stop if ends_on already passed or occurrences exhausted.
+        if (!empty($rule['ends_on']) && $scheduleFor > $rule['ends_on']) {
+            pm_exec('UPDATE recurring_rules SET paused = 1 WHERE id = ?', [$ruleId]);
+            return;
+        }
+        if ($rule['occurrences_left'] !== null && (int)$rule['occurrences_left'] <= 0) {
+            pm_exec('UPDATE recurring_rules SET paused = 1 WHERE id = ?', [$ruleId]);
+            return;
+        }
+
+        $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$rule['project_id']]);
+        if (!$proj) return;
+        $prefix = $proj['key_prefix'] ?: pm_config()['project_key'];
+
+        // Same retry-on-collision loop as pm_create_task.
+        $tid = null;
+        $attempts = 0;
+        while (true) {
+            $maxRow = pm_fetch_one(
+                "SELECT MAX(CAST(SUBSTRING_INDEX(ref, '-', -1) AS UNSIGNED)) AS m FROM tasks WHERE ref LIKE ?",
+                [$prefix . '-%']
+            );
+            $next = ((int)($maxRow['m'] ?? 0)) + 1;
+            if ($next < 100) $next = 100;
+            $ref = $prefix . '-' . $next;
+            try {
+                pm_exec(
+                    'INSERT INTO tasks (ref, project_id, status, title, description, priority, due, estimate, recurring_rule_id, created_by)
+                     VALUES (?,?,?,?,?,?,?,?,?,?)',
+                    [
+                        $ref, (int)$rule['project_id'], 'todo',
+                        $rule['title'], $rule['description'],
+                        (int)$rule['priority'], $scheduleFor,
+                        $rule['estimate'] ?: null,
+                        $ruleId, pm_current_user_id(),
+                    ]
+                );
+                $tid = pm_last_id();
+                break;
+            } catch (PDOException $e) {
+                if ($e->getCode() !== '23000' || ++$attempts >= 5) return;
+                usleep(random_int(1000, 5000));
+            }
+        }
+
+        $assignees = json_decode((string)($rule['assignees'] ?? ''), true);
+        $labels    = json_decode((string)($rule['labels']    ?? ''), true);
+        if (is_array($assignees)) foreach ($assignees as $uid) {
+            pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$tid, (int)$uid]);
+        }
+        if (is_array($labels)) foreach ($labels as $lid) {
+            pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$tid, (int)$lid]);
+        }
+
+        // Advance the rule cursor.
+        $occLeft = $rule['occurrences_left'] === null ? null : max(0, (int)$rule['occurrences_left'] - 1);
+        pm_exec(
+            'UPDATE recurring_rules SET next_run = ?, last_task_id = ?, occurrences_left = ? WHERE id = ?',
+            [$nextAfter, $tid, $occLeft, $ruleId]
+        );
+
+        pm_log_activity(pm_current_user_id() ?: 0, $tid, 'recurring_spawn', 'Generated from recurring rule');
+        $created = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$tid]);
+        pm_slack_notify_task_event($created, $proj, 'task_created', 'scheduled a recurring task');
+    } catch (Throwable $_) { /* best effort */ }
 }
