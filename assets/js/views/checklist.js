@@ -124,7 +124,15 @@ function ChecklistItem(task, { isLast, onOpen, onToggleStatus, onToggleSubtask }
       for (const s of sub) {
         subWrap.appendChild(h('div', {
           style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 8px', borderRadius: '6px', cursor: 'pointer' },
-          onClick: () => { onToggleSubtask(task.id, s.id, !s.done); s.done = !s.done; redraw(); },
+          // Wait for the API round-trip before flipping local state so a
+          // server-side failure doesn't desync the UI into a fake-success.
+          onClick: async () => {
+            try {
+              await onToggleSubtask(task.id, s.id, !s.done);
+              s.done = !s.done;
+              redraw();
+            } catch (err) { toast(err.message || 'Subtask toggle failed', 'error'); }
+          },
           onMouseenter: e => e.currentTarget.style.background = 'var(--bg-3)',
           onMouseleave: e => e.currentTarget.style.background = 'transparent',
         },

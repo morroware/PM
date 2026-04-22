@@ -9,13 +9,17 @@
     const me = (await API.me()).user;
     if (!me) { location.href = 'login.html'; return; }
   } catch (e) {
+    console.error('Auth check failed, redirecting to login:', e);
     location.href = 'login.html'; return;
   }
 
   // Bootstrap all data.
   let boot;
   try { boot = await API.bootstrap(); }
-  catch (e) { mount(rootEl, h('div', { class: 'empty' }, 'Failed to load: ' + e.message)); return; }
+  catch (e) {
+    mount(rootEl, h('div', { class: 'empty' }, 'Failed to load: ' + (e.message || 'Unknown error')));
+    return;
+  }
 
   // Global state (used by UI helpers that call `window.state`).
   const state = window.state = {
@@ -38,6 +42,12 @@
   };
   const saved = localStorage.getItem('pm_project');
   if (saved && saved !== 'null') state.filterProject = parseInt(saved, 10);
+  const savedAssignee = localStorage.getItem('pm_assignee');
+  if (savedAssignee && savedAssignee !== 'null') state.filterAssignee = parseInt(savedAssignee, 10);
+  try {
+    const savedLabels = JSON.parse(localStorage.getItem('pm_labels') || '[]');
+    if (Array.isArray(savedLabels)) state.filterLabels = savedLabels.map(Number).filter(Boolean);
+  } catch { /* ignore unparsable history */ }
 
   function taskIdFromHash() {
     const m = (location.hash || '').match(/^#task=(\d+)$/);
@@ -86,11 +96,13 @@
       API.listActivity().then(r => {
         state.activity = r.activity;
         if (state.view === 'dashboard') renderApp();
-      }).catch(() => {});
+      }).catch(e => console.warn('Activity refresh failed:', e));
     }, 400);
   }
-  API.listActivity().then(r => { state.activity = r.activity; if (state.view === 'dashboard') renderApp(); }).catch(() => {});
-  API.listSavedViews().then(r => { state.savedViews = r.saved_views || []; renderApp(); }).catch(() => {});
+  API.listActivity().then(r => { state.activity = r.activity; if (state.view === 'dashboard') renderApp(); })
+    .catch(e => console.warn('Initial activity load failed:', e));
+  API.listSavedViews().then(r => { state.savedViews = r.saved_views || []; renderApp(); })
+    .catch(e => console.warn('Saved views load failed:', e));
   // Exposed so view modules (e.g. task drawer when a comment is posted) can
   // nudge the feed without reaching into app.js internals.
   window.pmRefreshActivity = () => refreshActivity();
@@ -511,7 +523,7 @@
       asgBtn.addEventListener('click', () => {
         openPopover(asgBtn, ({close}) => assigneePickerContent(
           state.filterAssignee ? [state.filterAssignee] : [],
-          uid => { state.filterAssignee = state.filterAssignee === uid ? null : uid; renderApp(); },
+          uid => { state.filterAssignee = state.filterAssignee === uid ? null : uid; persist(); renderApp(); },
           close,
         ));
       });
@@ -527,6 +539,7 @@
             const set = new Set(state.filterLabels);
             set.has(lid) ? set.delete(lid) : set.add(lid);
             state.filterLabels = [...set];
+            persist();
             renderApp();
           },
           close, { keepOpen: true, scopeProjectId: state.filterProject },
@@ -1214,8 +1227,17 @@
 
   // ----- persistence -----
   function persist() {
-    localStorage.setItem('pm_view', state.view);
-    localStorage.setItem('pm_project', state.filterProject == null ? 'null' : String(state.filterProject));
+    // Wrapped in try/catch because Safari private mode throws a QuotaError
+    // the first time localStorage is written to, and we don't want a UI
+    // setting to blow up renders.
+    try {
+      localStorage.setItem('pm_view', state.view);
+      localStorage.setItem('pm_project',  state.filterProject  == null ? 'null' : String(state.filterProject));
+      localStorage.setItem('pm_assignee', state.filterAssignee == null ? 'null' : String(state.filterAssignee));
+      localStorage.setItem('pm_labels',   JSON.stringify(state.filterLabels || []));
+    } catch (e) {
+      console.warn('Filter persistence failed:', e);
+    }
   }
 
   // ----- shortcuts -----

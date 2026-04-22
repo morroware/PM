@@ -52,6 +52,12 @@ switch ($action) {
         $role  = trim((string)pm_param('role', ''));
         if ($email === '' || $pass === '' || $name === '') pm_error('Name, email and password required');
         if (strlen($pass) < 8) pm_error('Password must be at least 8 characters');
+        // Bound the fields at the column widths declared in install.php so a
+        // 5KB "name" doesn't get chopped server-side — or worse, surface a
+        // raw PDOException about a length violation.
+        if (mb_strlen($name)  > 120) pm_error('Name is too long');
+        if (mb_strlen($role)  > 80)  pm_error('Role is too long');
+        if (mb_strlen($email) > 255) pm_error('Email is too long');
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) pm_error('Invalid email');
         $exists = pm_fetch_one('SELECT id FROM users WHERE email = ?', [$email]);
         if ($exists) pm_error('An account with that email already exists', 409);
@@ -81,6 +87,8 @@ switch ($action) {
         $pass  = (string)pm_param('password', '');
         $cur   = (string)pm_param('current_password', '');
         if ($name === '') pm_error('Name required');
+        if (mb_strlen($name) > 120) pm_error('Name is too long');
+        if (mb_strlen($role) > 80)  pm_error('Role is too long');
         if ($color !== '' && !preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) pm_error('Invalid color');
         $initials = pm_make_initials($name);
         if ($pass !== '') {

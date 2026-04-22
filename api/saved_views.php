@@ -52,6 +52,7 @@ if ($method === 'POST' && $id === null) {
     pm_exec('INSERT INTO saved_views (user_id, name, view_key, filters_json, is_default) VALUES (?,?,?,?,?)',
         [$uid, $name, $view, $filters, $isDefault]);
     $row = pm_fetch_one('SELECT * FROM saved_views WHERE id = ?', [pm_last_id()]);
+    if (!$row) pm_error('Saved view could not be created', 500);
     pm_json(['saved_view' => pm_saved_view_shape($row)]);
 }
 

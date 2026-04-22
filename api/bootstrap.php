@@ -19,6 +19,14 @@ function pm_boot(): void {
     header('Content-Type: application/json; charset=utf-8');
     header('X-Content-Type-Options: nosniff');
     header('Cache-Control: no-store');
+    // Minimal hardening appropriate for JSON API responses. No CSP here —
+    // it's delivered by the static HTML shells — but clickjacking/referrer
+    // protection costs nothing and the API never intentionally renders HTML.
+    header('X-Frame-Options: DENY');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    if (!empty($c['cookie_secure'])) {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+    }
 }
 
 function pm_method(): string {
