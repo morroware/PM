@@ -208,7 +208,10 @@ function pm_create_task(): void {
         } catch (PDOException $e) {
             // 23000 = integrity constraint violation (duplicate ref).
             if ($e->getCode() !== '23000' || ++$attempts >= 5) {
-                pm_error('Failed to create task: ' . $e->getMessage(), 500);
+                // Log server-side for ops; don't leak schema/constraint names
+                // (and Slack-bound message text) back to the caller.
+                error_log('pm_create_task insert failed: ' . $e->getMessage());
+                pm_error('Failed to create task. Please try again.', 500);
             }
             // brief jitter so two racers don't lock-step forever
             usleep(random_int(1000, 5000));
@@ -224,7 +227,8 @@ function pm_create_task(): void {
         }
         pm_log_activity(pm_current_user_id(), $tid, 'created', $title);
     } catch (Throwable $e) {
-        pm_error('Failed to attach task metadata: ' . $e->getMessage(), 500);
+        error_log('pm_create_task metadata failed: ' . $e->getMessage());
+        pm_error('Task was created but metadata could not be attached.', 500);
     }
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$tid]);
     pm_slack_notify_task_event($t, $proj, 'task_created', 'created this task');
@@ -235,6 +239,11 @@ function pm_update_task(int $id): void {
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$id]);
     if (!$t) pm_error('Not found', 404);
     $body = pm_body();
+
+    // Snapshot the old status so the post-update side effects (Slack ping,
+    // recurring respawn) can detect a real *transition into* done and not fire
+    // again every time an already-done task is re-saved with no status change.
+    $prevStatus = (string)$t['status'];
 
     // Snapshot the old assignees so we can detect *newly added* ones and fire
     // a Slack task_assigned event for each, while avoiding duplicate pings to
@@ -294,7 +303,10 @@ function pm_update_task(int $id): void {
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$id]);
 
     // Fire Slack + recurring-generation side effects once the write is stable.
-    if (isset($body['status']) && $body['status'] === 'done' && $t['status'] === 'done') {
+    // Must be a *transition into* done — otherwise re-saving an already-done
+    // task would fire another Slack message and spawn another recurring
+    // instance on every save.
+    if ($prevStatus !== 'done' && $t['status'] === 'done') {
         $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$t['project_id']]);
         pm_slack_notify_task_event($t, $proj, 'task_completed', 'marked this task done');
         if (!empty($t['recurring_rule_id'])) {
@@ -316,14 +328,22 @@ function pm_update_task(int $id): void {
 }
 
 function pm_delete_task(int $id): void {
-    $t = pm_fetch_one('SELECT id FROM tasks WHERE id = ?', [$id]);
+    $t = pm_fetch_one('SELECT id, title FROM tasks WHERE id = ?', [$id]);
     if (!$t) pm_error('Not found', 404);
+    // Log before the delete so activity.task_id can still FK-resolve the
+    // title in the listing, and so the entry survives the cascade.
+    pm_log_activity(pm_current_user_id(), null, 'deleted', $t['title'] ?? '');
     pm_exec('DELETE FROM tasks WHERE id = ?', [$id]);
     pm_json(['ok' => true]);
 }
 
 // ---- subtasks ----
 function pm_add_subtask(int $taskId): void {
+    // Validate the parent task exists up-front. Without this, an INSERT for a
+    // bogus task_id raises a FK violation and we'd surface a raw PDOException
+    // (leaking schema) instead of a clean 404.
+    $task = pm_fetch_one('SELECT id FROM tasks WHERE id = ?', [$taskId]);
+    if (!$task) pm_error('Task not found', 404);
     $text = trim((string)pm_param('text', ''));
     if ($text === '') pm_error('Text required');
     $maxRow = pm_fetch_one('SELECT COALESCE(MAX(sort_order), 0) AS m FROM subtasks WHERE task_id = ?', [$taskId]);
@@ -338,6 +358,11 @@ function pm_add_subtask(int $taskId): void {
 }
 
 function pm_update_subtask(int $taskId, int $subId): void {
+    // Verify the subtask actually belongs to this task before doing anything
+    // else. The composite WHERE in the UPDATE already enforces that, but the
+    // early check lets us distinguish 404 (not ours) from 200 with zero rows.
+    $existing = pm_fetch_one('SELECT id FROM subtasks WHERE id = ? AND task_id = ?', [$subId, $taskId]);
+    if (!$existing) pm_error('Subtask not found', 404);
     $body = pm_body();
     $fields = [];
     $params = [];
@@ -360,7 +385,8 @@ function pm_update_subtask(int $taskId, int $subId): void {
 }
 
 function pm_delete_subtask(int $taskId, int $subId): void {
-    pm_exec('DELETE FROM subtasks WHERE id = ? AND task_id = ?', [$subId, $taskId]);
+    $n = pm_exec('DELETE FROM subtasks WHERE id = ? AND task_id = ?', [$subId, $taskId]);
+    if ($n === 0) pm_error('Subtask not found', 404);
     pm_json(['ok' => true]);
 }
 
@@ -415,7 +441,8 @@ function pm_update_comment(int $taskId, int $commentId): void {
     $comment = pm_fetch_one('SELECT * FROM comments WHERE id = ? AND task_id = ?', [$commentId, $taskId]);
     if (!$comment) pm_error('Comment not found', 404);
     $me = pm_current_user();
-    $isOwner = (int)($comment['user_id'] ?? 0) === (int)($me['id'] ?? 0);
+    if (!$me) pm_error('Not authenticated', 401);
+    $isOwner = (int)($comment['user_id'] ?? 0) === (int)$me['id'];
     if (!$isOwner && empty($me['is_admin'])) pm_error('Not allowed', 403);
     $body = trim((string)pm_param('body', ''));
     if ($body === '') pm_error('Empty comment');
@@ -437,7 +464,8 @@ function pm_delete_comment(int $taskId, int $commentId): void {
     $comment = pm_fetch_one('SELECT * FROM comments WHERE id = ? AND task_id = ?', [$commentId, $taskId]);
     if (!$comment) pm_error('Comment not found', 404);
     $me = pm_current_user();
-    $isOwner = (int)($comment['user_id'] ?? 0) === (int)($me['id'] ?? 0);
+    if (!$me) pm_error('Not authenticated', 401);
+    $isOwner = (int)($comment['user_id'] ?? 0) === (int)$me['id'];
     if (!$isOwner && empty($me['is_admin'])) pm_error('Not allowed', 403);
     pm_exec('DELETE FROM comments WHERE id = ? AND task_id = ?', [$commentId, $taskId]);
     pm_json(['ok' => true]);
@@ -465,8 +493,10 @@ function pm_notify_mentions(array $task, ?array $project, string $text): void {
 }
 
 function pm_bulk_update_tasks(): void {
-    $me = pm_current_user();
-    if (empty($me['is_admin'])) pm_error('Admin only', 403);
+    // pm_require_admin() both guards auth and returns a guaranteed-non-null
+    // array, so downstream code never has to defend against $me being null
+    // (which caused PHP 8 fatals on mid-session user deletion).
+    pm_require_admin();
     $body = pm_body();
     $ids = array_values(array_unique(array_map('intval', (array)($body['task_ids'] ?? []))));
     if (!$ids) pm_error('task_ids required');
@@ -552,10 +582,15 @@ function pm_generate_next_recurring_task(int $ruleId): void {
         // Decide the date we'll schedule on.
         require_once __DIR__ . '/recurring.php';
         $base = $rule['next_run'] ?: date('Y-m-d');
-        // If base is in the past, advance until it's >= today.
+        // If base is in the past, advance until it's >= today. The guard
+        // counter prevents an infinite loop if pm_recurring_next_date ever
+        // returns the same date (e.g. malformed rule with interval 0).
         $today = date('Y-m-d');
-        while ($base < $today) {
-            $base = pm_recurring_next_date($base, $rule);
+        $guard = 0;
+        while ($base < $today && $guard++ < 3650) {
+            $next = pm_recurring_next_date($base, $rule);
+            if ($next <= $base) break;
+            $base = $next;
         }
         $scheduleFor = $base;
         $nextAfter   = pm_recurring_next_date($scheduleFor, $rule);
