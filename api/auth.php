@@ -7,7 +7,11 @@ $action = $_GET['action'] ?? '';
 switch ($action) {
     case 'me':
         $u = pm_current_user();
-        pm_json(['user' => $u ? pm_public_user($u) : null]);
+        $cfg = pm_config();
+        pm_json([
+            'user' => $u ? pm_public_user($u) : null,
+            'allow_public_register' => !empty($cfg['allow_public_register']),
+        ]);
 
     case 'login': {
         if (pm_method() !== 'POST') pm_error('POST required', 405);
@@ -75,10 +79,16 @@ switch ($action) {
         $role = trim((string)pm_param('role', ''));
         $color = trim((string)pm_param('color', ''));
         $pass  = (string)pm_param('password', '');
+        $cur   = (string)pm_param('current_password', '');
         if ($name === '') pm_error('Name required');
+        if ($color !== '' && !preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) pm_error('Invalid color');
         $initials = pm_make_initials($name);
         if ($pass !== '') {
             if (strlen($pass) < 8) pm_error('Password must be at least 8 characters');
+            $row = pm_fetch_one('SELECT password_hash FROM users WHERE id = ?', [$uid]);
+            if (!$row || !password_verify($cur, $row['password_hash'])) {
+                pm_error('Current password is incorrect', 403);
+            }
             pm_exec(
                 'UPDATE users SET name=?, role=?, initials=?, color=?, password_hash=? WHERE id=?',
                 [$name, $role ?: null, $initials, $color ?: '#3B82F6', password_hash($pass, PASSWORD_DEFAULT), $uid]

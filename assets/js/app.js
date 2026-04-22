@@ -113,9 +113,19 @@
   }
   async function toggleSubtask(taskId, subId, done) {
     await API.updateSubtask(taskId, subId, { done });
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) t.subtasks = (t.subtasks || []).map(s => s.id === subId ? { ...s, done } : s);
   }
   async function addSubtask(taskId, text) {
-    return API.addSubtask(taskId, text);
+    const r = await API.addSubtask(taskId, text);
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) t.subtasks = [...(t.subtasks || []), r.subtask];
+    return r;
+  }
+  async function deleteSubtask(taskId, subId) {
+    await API.deleteSubtask(taskId, subId);
+    const t = state.tasks.find(x => x.id === taskId);
+    if (t) t.subtasks = (t.subtasks || []).filter(s => s.id !== subId);
   }
   async function deleteTask(id) {
     await API.deleteTask(id);
@@ -156,6 +166,7 @@
         onUpdate: updateTask,
         onToggleSubtask: toggleSubtask,
         onAddSubtask: addSubtask,
+        onDeleteSubtask: deleteSubtask,
         onDeleteTask: deleteTask,
       }));
       else {
@@ -164,6 +175,7 @@
       }
     }
     if (state.quickAddOpen) rootEl.appendChild(renderQuickAdd());
+    if (state.profileOpen) rootEl.appendChild(renderProfile());
   }
 
   // ----- sidebar -----
@@ -257,6 +269,8 @@
         h('div', { class: 'me' }, state.me.name),
         h('div', { class: 'me-role' }, state.me.role || ''),
       ),
+      h('button', { class: 'icon-btn sm', title: 'Profile',
+        onClick: () => { state.profileOpen = true; renderApp(); } }, Icon('settings', 14)),
       h('button', { class: 'icon-btn sm', title: 'Log out',
         onClick: async () => { await API.logout(); location.href = 'login.html'; } }, Icon('logout', 14)),
     ));
@@ -291,7 +305,15 @@
     const tasks = filteredTasks();
     const handlers = {
       onOpenTask: (id) => { state.openTaskId = id; setTaskHash(id); renderApp(); },
-      onAddTask: (statusId) => { state.quickAddStatus = statusId || 'todo'; state.quickAddOpen = true; renderApp(); },
+      onAddTask: (statusId, extras = {}) => {
+        state.quickAddStatus = statusId || 'todo';
+        state.quickAddDefaults = {
+          projectId: extras.projectId ?? null,
+          assigneeId: extras.assigneeId ?? null,
+        };
+        state.quickAddOpen = true;
+        renderApp();
+      },
       onMoveTask: (id, s) => moveTask(id, s),
       onToggleStatus: id => toggleStatus(id),
       onToggleSubtask: toggleSubtask,
@@ -337,20 +359,32 @@
     bar.appendChild(search);
 
     bar.appendChild(h('button', { class: 'btn btn-primary',
-      onClick: () => { state.quickAddStatus = 'todo'; state.quickAddOpen = true; renderApp(); } },
+      onClick: () => { state.quickAddStatus = 'todo'; state.quickAddDefaults = null; state.quickAddOpen = true; renderApp(); } },
       Icon('plus', 14), ' New task'));
     return bar;
   }
 
-  // Re-render just main area (used for search typing to avoid losing focus)
+  // Re-render just main area (used for search typing to avoid losing focus).
+  // Replacing .main destroys the search <input>; re-focus it and restore the
+  // caret so the user's still typing into the same-looking box.
   let mainRenderHandle = null;
   function renderMainContent() {
     clearTimeout(mainRenderHandle);
     mainRenderHandle = setTimeout(() => {
       const mainEl = rootEl.querySelector('.main');
       if (!mainEl) return renderApp();
+      const prev = document.getElementById('global-search');
+      const hadFocus = prev && document.activeElement === prev;
+      const caret = hadFocus ? prev.selectionStart : null;
       const newMain = renderMain();
       mainEl.replaceWith(newMain);
+      if (hadFocus) {
+        const next = document.getElementById('global-search');
+        if (next) {
+          next.focus();
+          if (caret != null) try { next.setSelectionRange(caret, caret); } catch {}
+        }
+      }
     }, 100);
   }
 
@@ -441,10 +475,12 @@
 
   // ----- quick-add modal -----
   function renderQuickAdd() {
+    const defaults = state.quickAddDefaults || {};
+    const assignees = defaults.assigneeId != null ? [defaults.assigneeId] : [state.me.id];
     const form = {
       title: '', status: state.quickAddStatus || 'todo',
-      project: state.filterProject || (state.projects[0] && state.projects[0].id),
-      priority: 2, assignees: [state.me.id], labels: [],
+      project: defaults.projectId || state.filterProject || (state.projects[0] && state.projects[0].id),
+      priority: 2, assignees, labels: [],
     };
 
     const frag = document.createDocumentFragment();
@@ -455,6 +491,7 @@
 
     function close() {
       state.quickAddOpen = false;
+      state.quickAddDefaults = null;
       scrim.remove(); modal.remove();
     }
     async function submit() {
@@ -537,6 +574,122 @@
     return frag;
   }
 
+  // ----- profile modal -----
+  function renderProfile() {
+    const form = {
+      name: state.me.name || '',
+      role: state.me.role || '',
+      color: state.me.color || '#3B82F6',
+      current_password: '',
+      password: '',
+    };
+    const frag = document.createDocumentFragment();
+    const scrim = h('div', { class: 'scrim', onClick: close });
+    const modal = h('div', { class: 'modal' });
+    frag.appendChild(scrim);
+    frag.appendChild(modal);
+
+    function close() {
+      state.profileOpen = false;
+      scrim.remove(); modal.remove();
+    }
+
+    async function submit() {
+      const name = form.name.trim();
+      if (!name) { toast('Name is required', 'error'); return; }
+      if (form.password && form.password.length < 8) {
+        toast('New password must be at least 8 characters', 'error'); return;
+      }
+      if (form.password && !form.current_password) {
+        toast('Enter your current password to change it', 'error'); return;
+      }
+      try {
+        const payload = { name, role: form.role.trim(), color: form.color };
+        if (form.password) {
+          payload.password = form.password;
+          payload.current_password = form.current_password;
+        }
+        const r = await API.updateProfile(payload);
+        state.me = r.user;
+        state.users = state.users.map(u => u.id === r.user.id ? r.user : u);
+        toast('Profile updated', 'success');
+        close();
+        renderApp();
+      } catch (e) { toast(e.message || 'Update failed', 'error'); }
+    }
+
+    const palette = ['#3B82F6','#A855F7','#F59E0B','#22C55E','#EC4899','#06B6D4','#EF4444','#8B5CF6','#64748B'];
+
+    function redraw() {
+      modal.replaceChildren();
+      const head = h('div', { class: 'modal-head' });
+      head.appendChild(h('div', { class: 'modal-head-label' }, 'Profile'));
+      head.appendChild(h('div', { style: { fontSize: '17px', fontWeight: '500' } }, 'Edit your profile'));
+      modal.appendChild(head);
+
+      const body = h('div', { class: 'modal-body', style: { flexDirection: 'column', gap: '12px', padding: '18px 20px' } });
+
+      const fieldStyle = {
+        width: '100%', background: 'var(--bg-3)', border: '1px solid var(--line-2)',
+        borderRadius: '8px', padding: '9px 11px', color: 'var(--fg-0)', outline: 'none', fontSize: '13.5px',
+      };
+
+      body.appendChild(h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12px', color: 'var(--fg-2)', marginBottom: '5px', fontWeight: '500' } }, 'Name'),
+        h('input', { style: fieldStyle, value: form.name, onInput: e => { form.name = e.target.value; } }),
+      ));
+      body.appendChild(h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12px', color: 'var(--fg-2)', marginBottom: '5px', fontWeight: '500' } }, 'Role'),
+        h('input', { style: fieldStyle, value: form.role, onInput: e => { form.role = e.target.value; }, placeholder: 'e.g. Field Tech' }),
+      ));
+
+      const swatches = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
+      for (const c of palette) {
+        const isOn = form.color.toLowerCase() === c.toLowerCase();
+        swatches.appendChild(h('button', {
+          title: c,
+          style: {
+            width: '26px', height: '26px', borderRadius: '6px', background: c,
+            border: isOn ? '2px solid var(--fg-0)' : '2px solid transparent',
+            outline: '1px solid var(--line-2)', cursor: 'pointer',
+          },
+          onClick: (e) => { e.preventDefault(); form.color = c; redraw(); },
+        }));
+      }
+      body.appendChild(h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12px', color: 'var(--fg-2)', marginBottom: '5px', fontWeight: '500' } }, 'Avatar color'),
+        swatches,
+      ));
+
+      body.appendChild(h('div', { style: { height: '1px', background: 'var(--line)', margin: '4px 0 2px' } }));
+      body.appendChild(h('div', { style: { fontSize: '11px', color: 'var(--fg-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: '600' } }, 'Change password (optional)'));
+
+      body.appendChild(h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12px', color: 'var(--fg-2)', marginBottom: '5px', fontWeight: '500' } }, 'Current password'),
+        h('input', { type: 'password', style: fieldStyle, value: form.current_password, autocomplete: 'current-password',
+          onInput: e => { form.current_password = e.target.value; } }),
+      ));
+      body.appendChild(h('div', null,
+        h('label', { style: { display: 'block', fontSize: '12px', color: 'var(--fg-2)', marginBottom: '5px', fontWeight: '500' } }, 'New password'),
+        h('input', { type: 'password', style: fieldStyle, value: form.password, autocomplete: 'new-password', minlength: 8,
+          onInput: e => { form.password = e.target.value; },
+          onKeydown: e => { if (e.key === 'Enter') submit(); } }),
+      ));
+
+      modal.appendChild(body);
+
+      const foot = h('div', { class: 'modal-foot' });
+      foot.appendChild(h('span', { class: 'hint' }, state.me.email || ''));
+      foot.appendChild(h('div', { class: 'hstack' },
+        h('button', { class: 'btn btn-ghost', onClick: close }, 'Cancel'),
+        h('button', { class: 'btn btn-primary', onClick: submit }, 'Save'),
+      ));
+      modal.appendChild(foot);
+    }
+    redraw();
+    return frag;
+  }
+
   // ----- persistence -----
   function persist() {
     localStorage.setItem('pm_view', state.view);
@@ -552,6 +705,7 @@
     if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !e.shiftKey && !state.openTaskId && !state.quickAddOpen) {
       e.preventDefault();
       state.quickAddStatus = 'todo';
+      state.quickAddDefaults = null;
       state.quickAddOpen = true;
       renderApp();
     }

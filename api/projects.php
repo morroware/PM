@@ -22,6 +22,7 @@ if ($method === 'POST' && $id === null) {
     $color  = (string)pm_param('color', '#3B82F6');
     $prefix = strtoupper(trim((string)pm_param('key_prefix', 'PRJ')));
     if ($name === '') pm_error('Name required');
+    if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) pm_error('Invalid color');
     if ($prefix === '' || !preg_match('/^[A-Z0-9]{1,8}$/', $prefix)) pm_error('Invalid key_prefix');
     pm_exec('INSERT INTO projects (name, color, key_prefix) VALUES (?,?,?)',
         [$name, $color, $prefix]);
@@ -36,7 +37,11 @@ if ($method === 'PATCH' && $id !== null) {
     $body = pm_body();
     $f = []; $p = [];
     if (isset($body['name']))   { $f[]='name = ?';   $p[]=trim((string)$body['name']); }
-    if (isset($body['color']))  { $f[]='color = ?';  $p[]=(string)$body['color']; }
+    if (isset($body['color']))  {
+        $c = (string)$body['color'];
+        if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $c)) pm_error('Invalid color');
+        $f[]='color = ?';  $p[]=$c;
+    }
     if (isset($body['archived'])){$f[]='archived = ?'; $p[]=!empty($body['archived']) ? 1 : 0; }
     if (!$f) pm_error('Nothing to update');
     $p[] = $id;
