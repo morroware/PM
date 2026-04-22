@@ -55,6 +55,8 @@ minutes". Any change that breaks that contract is a regression.
 │           ├── checklist.js  "My tasks" view
 │           ├── calendar.js   month grid
 │           └── detail.js     task drawer (inline edits, subtasks, comments)
+├── docs/
+│   └── regression-checklist.md  release-gate smoke tests + auth matrix
 └── design/              original Claude Design HTML mockup (reference only)
 ```
 
