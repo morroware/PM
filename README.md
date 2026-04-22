@@ -1,88 +1,146 @@
-# Project Manager — cPanel-friendly build
+# Project Manager (cPanel-friendly, no build step)
 
-A multi-user project/task manager (Kanban / List / Calendar / Dashboard / My-Tasks).
-Designed to run on any shared **cPanel** host with **PHP 8+** and **MySQL / MariaDB**
-— no shell access, no Node.js, no Composer, no build step.
+A multi-user project/task manager built for shared hosting.
 
-The UI matches the [original mockup](design/Castle%20Tech%20Tasks.html) from
-Claude Design (preserved under `design/` for reference), reimplemented as
-vanilla HTML/CSS/JavaScript on top of a small PHP + PDO backend.
+This app is designed to run on typical **cPanel + PHP + MySQL/MariaDB** hosting with:
 
-## Stack
+- No Node.js
+- No Composer
+- No daemon workers
+- No shell requirement in production
 
-| Layer    | What                                                     |
-|----------|----------------------------------------------------------|
-| Frontend | Vanilla ES-2020 JavaScript, plain CSS (custom property tokens), inline SVG icons. Loaded from `<script src>` — no bundler. |
-| Backend  | Plain PHP files, one per resource, using PDO. Sessions for auth. |
-| Database | MySQL / MariaDB (any version shipped with cPanel for the last ~10 years). |
-| Fonts    | Google Fonts CDN (`Inter`, `JetBrains Mono`) — swap to local if you're offline. |
+It preserves the original design direction in `design/` while shipping a production-ready vanilla JS + PHP implementation.
 
-## Deploy to cPanel in 5 steps (no shell needed)
+## Current product status (April 22, 2026)
 
-1. **Create a MySQL database + user.**
-   In cPanel → **MySQL Databases**: add a new DB (e.g. `cpaneluser_pm`), add a
-   new user, set a strong password, and grant **ALL PRIVILEGES** on that DB.
+The software is currently a full multi-view task manager with:
 
-2. **Upload files.**
-   In cPanel → **File Manager**, go into `public_html` (or a subdirectory like
-   `public_html/pm/`). Either:
-   - **Drag & drop** the contents of this repository (everything except
-     `design/`, `README.md`, and the `.git/` folder) into that directory, **or**
-   - Compress this repo locally into a zip, upload the zip, then right-click →
-     **Extract**.
+- Auth, profile updates, and admin/member permissions
+- Project and label management (including archive + merge controls)
+- Task CRUD with subtasks, comments, assignees, labels, due dates, priority, estimate
+- Dashboard, Kanban, List, Checklist, and Calendar views
+- Saved views and list bulk actions
+- Recurring task rules API
+- Slack integration API with event toggles, templates, test delivery, and delivery history fields
 
-3. **Edit `api/config.php`.**
-   Right-click → **Edit** in File Manager. Fill in `db_name`, `db_user`,
-   `db_pass` with the values from step 1. Save.
+For release validation coverage, see `docs/regression-checklist.md`.
 
-4. **Run the installer.**
-   Visit `https://yourdomain.com/pm/install.php` (adjust the path).
-   - Click **Run install** to create tables + seed projects/labels.
-   - Fill out the form to create your **first admin user**.
+## Tech stack
 
-5. **Delete `install.php`** from File Manager, then go to
-   `https://yourdomain.com/pm/login.html` and sign in. Done.
+| Layer | Implementation |
+|---|---|
+| Frontend | Vanilla ES modules via script tags (no bundler), plain CSS, inline SVG icon set |
+| Backend | Plain PHP endpoints (`api/*.php`), session-based auth, PDO helpers |
+| Database | MySQL/MariaDB (InnoDB, utf8mb4) |
+| State | API-backed data + `localStorage` for persisted UI preferences |
 
-## Post-install: adding teammates
+## Core capabilities
 
-By default, public registration is **off**. Two ways to add more users:
+### 1) Authentication and user profiles
 
-- **Flip the flag temporarily.** Edit `api/config.php` and set
-  `'allow_public_register' => true`. Share `register.html` with your team,
-  then turn it back off once everyone is in.
-- **Create from the admin session.** While logged in as admin, POST to
-  `api/auth.php?action=register` with `{name, email, password, role}`. A
-  proper admin UI for this is a natural next improvement.
+- Session-based login/logout
+- Registration flow (public registration toggle in `api/config.php`)
+- Admin-created users through API
+- Profile editing (name/role/color)
+- Password change requiring current password confirmation
 
-## File layout
+### 2) Task lifecycle
 
-```
-/                       ← upload the contents of this directory to cPanel
-├── index.html          ← main app (after login)
-├── login.html          ← sign-in page
-├── register.html       ← self-serve registration (gated by config)
-├── install.php         ← one-time setup; DELETE after running
-├── .htaccess           ← sets index.html as default, hides dotfiles
+- Create/update/delete tasks
+- Auto-generated project-key references (e.g. `CTT-104`)
+- Status, priority, due date, estimate, description updates
+- Multi-assignee and multi-label support
+- Subtasks CRUD
+- Comment thread CRUD (with moderation rules enforced server-side)
+- Deep-linkable task drawer via URL hash (`#task=<id>`)
+
+### 3) Views
+
+- **Dashboard**: summary cards, workload, activity feed
+- **Kanban**: drag/drop status movement
+- **List**: grouping/sorting + bulk actions
+- **Checklist (My tasks)**: assignee-focused personal queue
+- **Calendar**: month view with drag-to-reschedule support
+
+### 4) Filtering and productivity
+
+- Project, assignee, and label filters
+- Live global search (`Ctrl/Cmd + K`)
+- Quick create (`Ctrl/Cmd + N`)
+- Saved personal views (`saved_views` table + API)
+- Persisted selected view + project filter in `localStorage`
+
+### 5) Project administration
+
+From the in-app **Admin settings** modal:
+
+- Create/edit/archive/unarchive/delete projects
+- Project metadata: name, key prefix, color, description
+- Optional per-project Slack channel override
+- Archived projects hidden from default sidebar/API listing
+
+### 6) Label administration
+
+From the in-app **Admin settings** modal:
+
+- Create/edit/archive/unarchive/delete labels
+- Global or project-scoped labels
+- Duplicate prevention by scope (`name + scope`)
+- Usage-aware safeguards (archive/delete conflict handling)
+- Label merge operation to consolidate taxonomy
+
+### 7) Slack integration (API surface implemented)
+
+Admin-only Slack endpoints support:
+
+- Save integration settings and token
+- Enable/disable event types (`task_created`, `task_completed`, `task_assigned`, `comment_added`, `project_archived`, `mention_added`)
+- Message template overrides per event
+- Test message sending
+- Last success/error telemetry and delivery history payload support
+
+> Note: Slack management is currently API-driven (`api/slack.php`). The in-app admin modal currently focuses on projects and labels.
+
+### 8) Recurring tasks (API surface implemented)
+
+Admin-only recurring rule endpoints support:
+
+- Cadences: daily, weekly, monthly, yearly
+- Interval and cadence-specific date fields (weekday/month day/month of year)
+- End conditions (`ends_on`, `occurrences_left`)
+- Pause/resume behavior
+- Next-run date tracking and linkage via `tasks.recurring_rule_id`
+
+> Note: recurring rule management is currently API-driven (`api/recurring.php`).
+
+## Repository layout
+
+```text
+.
 ├── api/
-│   ├── config.php      ← edit this with your MySQL credentials
-│   ├── db.php          ← PDO connection helpers
-│   ├── bootstrap.php   ← session + JSON helpers + auth guards
-│   ├── auth.php        ← login / logout / register / me / update_profile
-│   ├── tasks.php       ← task + subtask + comment CRUD
-│   ├── projects.php    ← project CRUD (admin-only for writes)
-│   ├── labels.php      ← label CRUD
-│   ├── users.php       ← list / patch / delete team members
-│   ├── activity.php    ← recent activity feed
-│   └── .htaccess       ← denies direct access to config.php
+│   ├── auth.php            # login/logout/register/me/update_profile
+│   ├── bootstrap.php       # session + auth + JSON helpers
+│   ├── config.php          # environment config and feature flags
+│   ├── db.php              # PDO and query helpers
+│   ├── tasks.php           # task, subtask, comment CRUD + bulk patch
+│   ├── projects.php        # project CRUD + archive semantics
+│   ├── labels.php          # label CRUD + merge/archive governance
+│   ├── recurring.php       # recurring rule CRUD (admin writes)
+│   ├── slack.php           # Slack settings/test (admin-only)
+│   ├── slack_client.php    # outbound Slack delivery helpers
+│   ├── users.php           # user list/admin patch-delete
+│   ├── activity.php        # activity feed endpoint
+│   ├── saved_views.php     # per-user saved filter/view presets
+│   └── settings.php        # app_settings table read/write helpers
 ├── assets/
 │   ├── css/
-│   │   ├── app.css     ← all app styling (token-based)
-│   │   └── auth.css    ← login / register page styles
+│   │   ├── app.css
+│   │   └── auth.css
 │   └── js/
-│       ├── api.js      ← fetch wrapper
-│       ├── icons.js    ← Lucide-style inline SVGs
-│       ├── ui.js       ← h() helper + avatars, tags, popovers, pickers
-│       ├── app.js      ← shell: sidebar, topbar, filters, quick-add
+│       ├── app.js
+│       ├── api.js
+│       ├── ui.js
+│       ├── icons.js
 │       └── views/
 │           ├── dashboard.js
 │           ├── kanban.js
@@ -90,44 +148,90 @@ By default, public registration is **off**. Two ways to add more users:
 │           ├── checklist.js
 │           ├── calendar.js
 │           └── detail.js
-└── design/             ← original Claude Design mockup (reference only)
+├── docs/
+│   └── regression-checklist.md
+├── design/                 # reference/mockup assets
+├── index.html
+├── login.html
+├── register.html
+├── install.php             # run once, then delete in deployed environments
+├── PLAN.md                 # roadmap/progress document
+└── README.md
 ```
 
-## Updating the app later
+## Install and deploy (cPanel)
 
-There's no build step, so editing a file in File Manager takes effect
-immediately. Your browser may cache JS and CSS — hard-reload with
-`Ctrl+Shift+R` (or `Cmd+Shift+R` on Mac). For production cache-busting,
-append `?v=2` (and bump the number) to the `<script>` / `<link>` tags in
-`index.html`, `login.html`, and `register.html`.
+1. **Create DB + user in cPanel** with full privileges.
+2. **Upload files** to your target web directory.
+3. **Edit `api/config.php`** with DB credentials and desired flags.
+4. Open **`/install.php`** and run schema + default seed.
+5. Create the first admin account in installer UI.
+6. **Delete `install.php`** after successful setup.
+7. Log in at `login.html`.
 
-## Security notes
+## Configuration
 
-- Sessions use an HttpOnly cookie. Set `cookie_secure` to `true` in
-  `api/config.php` once your site is HTTPS-only.
-- Passwords are bcrypt-hashed via `password_hash(PASSWORD_DEFAULT)`.
-- All DB access goes through PDO prepared statements.
-- `api/.htaccess` denies direct HTTP access to `api/config.php` — don't
-  remove this file.
-- Admin-only endpoints (creating projects/labels, changing another user's
-  role, deleting users) check `is_admin` server-side.
+Edit `api/config.php`:
 
-## Features
+- Database connection values
+- Session cookie settings (`cookie_secure`, `cookie_samesite`)
+- `allow_public_register`
+- App defaults (`app_name`, `project_key`)
 
-- **Five views**: Dashboard (stats, workload, activity), Kanban (drag-drop),
-  List (groupable + sortable), My-Tasks checklist, Month Calendar.
-- **Task detail drawer** with inline-editable title/description/due/priority/
-  status/assignees/labels/estimate, subtasks, and comments.
-- **Filters**: project / assignee / labels, plus global search (`Ctrl+K`).
-- **Saved views + bulk actions**: save personal filter presets and run list-view bulk updates (labels, status, due date).
-- **Shortcuts**: `Ctrl+K` search, `Ctrl+N` new task.
-- **Collaboration upgrades**: comment edit/delete (owner or admin moderation), @mention detection hooks, and richer Slack delivery diagnostics/retries.
-- **Persistence**: view + project filter remembered in `localStorage`.
+## Database model highlights
 
-## Known gaps
+Installer creates and migrates the following core tables:
 
-- No file attachments. Straightforward to add: a `uploads/` directory and a
-  small PHP endpoint. Skipped here to keep security surface minimal.
-- No real-time updates. Reload or switch views to see changes from other
-  users; polling or SSE would be an easy follow-up.
-- Admin UI for user / project / label management is API-only for now.
+- `users`
+- `projects`
+- `labels`
+- `tasks`
+- `subtasks`
+- `task_assignees`
+- `task_labels`
+- `comments`
+- `activity`
+- `app_settings`
+- `recurring_rules`
+- `saved_views`
+
+The installer includes additive migration helpers to backfill missing columns/indexes/FKs on older installs.
+
+## Authorization model
+
+- All task read/write operations require authentication.
+- Project/label/Slack/recurring write operations require admin privileges.
+- User role/admin mutations require admin privileges.
+- Server-side checks are authoritative (UI visibility is not the only control).
+
+## Operational notes
+
+- No build pipeline: file edits deploy directly.
+- For cache busting, bump `?v=` query params in HTML script/link tags.
+- If using HTTPS, set `cookie_secure` to `true`.
+- Keep `api/.htaccess` protections in place.
+
+## Regression and QA
+
+Use `docs/regression-checklist.md` as release-gate verification for:
+
+- Auth flows
+- Task CRUD
+- View consistency
+- Filters/shortcuts
+- Admin-only surfaces
+- Permissions matrix
+- Data integrity behaviors
+
+## Known limitations / next recommended work
+
+- Slack and recurring management UIs are not yet fully exposed in the in-app settings modal (APIs exist now).
+- No file attachments.
+- No realtime push transport (polling/reload patterns currently used).
+- No background worker process (intentional for shared-host compatibility).
+
+## Compatibility target
+
+- PHP 8+
+- MySQL/MariaDB versions commonly available on cPanel shared hosting
+- Modern evergreen browsers
