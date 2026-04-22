@@ -71,7 +71,7 @@ const API = {
   getProject(id)            { return this.get(`projects.php?id=${id}`); },
   createProject(data)       { return this.post('projects.php', data); },
   updateProject(id, patch)  { return this.patch(`projects.php?id=${id}`, patch); },
-  deleteProject(id)         { return this.del(`projects.php?id=${id}`); },
+  deleteProject(id, force=false) { return this.del(`projects.php?id=${id}${force ? '&force=1' : ''}`); },
 
   // ---- labels ----
   listLabels(opts = {})     {
@@ -82,7 +82,7 @@ const API = {
   },
   createLabel(data)         { return this.post('labels.php', data); },
   updateLabel(id, patch)    { return this.patch(`labels.php?id=${id}`, patch); },
-  deleteLabel(id)           { return this.del(`labels.php?id=${id}`); },
+  deleteLabel(id, force=false) { return this.del(`labels.php?id=${id}${force ? '&force=1' : ''}`); },
 
   // ---- slack integration ----
   getSlack()                { return this.get('slack.php'); },

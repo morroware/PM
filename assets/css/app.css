@@ -338,7 +338,8 @@ input, textarea { font: inherit; color: inherit; }
 .cal-daynum { font-size: 11.5px; font-weight: 600; width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; color: var(--fg-1); }
 .cal-daynum.today { background: var(--acc-0); color: white; }
 .cal-cell.not-in-month .cal-daynum { color: var(--fg-4); }
-.cal-event { font-size: 11px; padding: 3px 6px; border-radius: 4px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cal-event { font-size: 11px; padding: 3px 6px; border-radius: 4px; cursor: pointer; overflow: hidden; white-space: nowrap; font-weight: 500; display: flex; align-items: center; min-width: 0; }
+.cal-event .icon { flex-shrink: 0; }
 .cal-event.done { text-decoration: line-through; opacity: 0.55; }
 
 /* ---------- Animations ---------- */

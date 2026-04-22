@@ -48,13 +48,17 @@ function renderCalendar(tasks, { onOpenTask }) {
         const done = t.status === 'done';
         return h('div', {
           class: 'cal-event' + (done ? ' done' : ''),
-          title: t.title,
+          title: t.title + (t.comments ? ` · ${t.comments} comment${t.comments === 1 ? '' : 's'}` : ''),
           style: proj ? {
             background: proj.color + '18', color: proj.color,
             borderLeft: '2px solid ' + proj.color
           } : {},
           onClick: (e) => { e.stopPropagation(); onOpenTask(t.id); },
-        }, t.title);
+        },
+          h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } }, t.title),
+          t.comments > 0 ? h('span', { style: { marginLeft: '4px', fontSize: '10px', opacity: '0.8' } },
+            Icon('message', 10), ' ' + t.comments) : null,
+        );
       };
       for (const t of dayTasks.slice(0, 3)) cell.appendChild(renderEvent(t));
       if (dayTasks.length > 3) {

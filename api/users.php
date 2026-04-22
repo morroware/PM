@@ -30,11 +30,22 @@ if ($method === 'PATCH' && $id !== null) {
         if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $c)) pm_error('Invalid color');
         $f[]='color = ?';   $p[]=$c;
     }
-    if (isset($body['is_admin'])){ $f[]='is_admin = ?';$p[]=!empty($body['is_admin']) ? 1 : 0; }
+    if (isset($body['is_admin'])){
+        // Don't let an admin demote themselves out of the last admin seat —
+        // leaves the system with no one who can manage it.
+        $wantAdmin = !empty($body['is_admin']) ? 1 : 0;
+        if (!$wantAdmin && $id === pm_current_user_id()) {
+            $otherAdmins = (int)(pm_fetch_one('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1 AND id <> ?', [$id])['c'] ?? 0);
+            if ($otherAdmins === 0) pm_error('Cannot remove the last admin');
+        }
+        $f[]='is_admin = ?'; $p[]=$wantAdmin;
+    }
     if (!$f) pm_error('Nothing to update');
     $p[] = $id;
     pm_exec('UPDATE users SET ' . implode(',', $f) . ' WHERE id = ?', $p);
-    pm_json(['ok' => true]);
+    $row = pm_fetch_one('SELECT id, name, role, initials, color, is_admin FROM users WHERE id = ?', [$id]);
+    if (!$row) pm_error('Not found', 404);
+    pm_json(['user' => pm_public_user($row)]);
 }
 
 pm_error('Method not allowed', 405);

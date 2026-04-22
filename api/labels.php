@@ -109,6 +109,14 @@ if ($method === 'PATCH' && $id !== null) {
 
 if ($method === 'DELETE' && $id !== null) {
     pm_require_admin();
+    $force = !empty($_GET['force']);
+    $useCount = (int)(pm_fetch_one('SELECT COUNT(*) AS c FROM task_labels WHERE label_id = ?', [$id])['c'] ?? 0);
+    if ($useCount > 0 && !$force) {
+        pm_json([
+            'error'     => 'Label is in use on ' . $useCount . ' task' . ($useCount === 1 ? '' : 's') . '. Archive instead, or re-send with force=1.',
+            'use_count' => $useCount,
+        ], 409);
+    }
     pm_exec('DELETE FROM labels WHERE id = ?', [$id]);
     pm_json(['ok' => true]);
 }
