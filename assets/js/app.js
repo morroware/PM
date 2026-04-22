@@ -33,6 +33,7 @@
     openTaskId: null,
     quickAddOpen: false,
     quickAddStatus: 'todo',
+    settingsOpen: false,
   };
   const saved = localStorage.getItem('pm_project');
   if (saved && saved !== 'null') state.filterProject = parseInt(saved, 10);
@@ -176,6 +177,7 @@
     }
     if (state.quickAddOpen) rootEl.appendChild(renderQuickAdd());
     if (state.profileOpen) rootEl.appendChild(renderProfile());
+    if (state.settingsOpen) rootEl.appendChild(renderSettings());
   }
 
   // ----- sidebar -----
@@ -361,6 +363,12 @@
     bar.appendChild(h('button', { class: 'btn btn-primary',
       onClick: () => { state.quickAddStatus = 'todo'; state.quickAddDefaults = null; state.quickAddOpen = true; renderApp(); } },
       Icon('plus', 14), ' New task'));
+    if (state.me.is_admin) {
+      bar.appendChild(h('button', {
+        class: 'btn btn-muted',
+        onClick: () => { state.settingsOpen = true; renderApp(); },
+      }, Icon('settings', 14), ' Settings'));
+    }
     return bar;
   }
 
@@ -686,6 +694,243 @@
       ));
       modal.appendChild(foot);
     }
+    redraw();
+    return frag;
+  }
+
+  // ----- admin settings -----
+  function renderSettings() {
+    const colors = ['#3B82F6','#A855F7','#F59E0B','#22C55E','#EC4899','#06B6D4','#EF4444','#8B5CF6','#64748B'];
+    const model = {
+      includeArchived: true,
+      saving: false,
+      loading: true,
+      err: '',
+      projects: [],
+      projectDetails: {},
+      form: {
+        id: null,
+        name: '',
+        key_prefix: 'PRJ',
+        color: colors[0],
+        description: '',
+        slack_channel: '',
+      },
+    };
+
+    const frag = document.createDocumentFragment();
+    const scrim = h('div', { class: 'scrim', onClick: close });
+    const modal = h('div', { class: 'settings-modal' });
+    frag.appendChild(scrim);
+    frag.appendChild(modal);
+
+    function close() {
+      state.settingsOpen = false;
+      scrim.remove();
+      modal.remove();
+    }
+
+    function resetForm(p = null) {
+      model.err = '';
+      model.form.id = p?.id ?? null;
+      model.form.name = p?.name ?? '';
+      model.form.key_prefix = p?.key_prefix ?? 'PRJ';
+      model.form.color = p?.color ?? colors[0];
+      model.form.description = p?.description ?? '';
+      model.form.slack_channel = p?.slack_channel ?? '';
+    }
+
+    function detailMeta(project) {
+      const d = model.projectDetails[project.id];
+      return d ? `${d.task_count || 0} tasks` : '…';
+    }
+
+    async function refreshProjects() {
+      model.loading = true;
+      redraw();
+      try {
+        const r = await API.listProjects({ includeArchived: model.includeArchived });
+        model.projects = r.projects || [];
+      } catch (e) {
+        model.err = e.message || 'Failed to load projects';
+      } finally {
+        model.loading = false;
+      }
+      redraw();
+      for (const p of model.projects) {
+        if (model.projectDetails[p.id]) continue;
+        API.getProject(p.id).then(r => {
+          model.projectDetails[p.id] = r.project;
+          redraw();
+        }).catch(() => {});
+      }
+    }
+
+    async function saveProject() {
+      const payload = {
+        name: model.form.name.trim(),
+        key_prefix: model.form.key_prefix.trim().toUpperCase(),
+        color: model.form.color,
+        description: model.form.description.trim(),
+        slack_channel: model.form.slack_channel.trim(),
+      };
+      if (!payload.name) { model.err = 'Project name is required'; redraw(); return; }
+      if (!payload.key_prefix) { model.err = 'Key prefix is required'; redraw(); return; }
+      model.saving = true;
+      model.err = '';
+      redraw();
+      try {
+        if (model.form.id) await API.updateProject(model.form.id, payload);
+        else await API.createProject(payload);
+        const [projects, tasks] = await Promise.all([API.listProjects(), API.listTasks()]);
+        state.projects = projects.projects;
+        state.tasks = tasks.tasks;
+        resetForm(null);
+        await refreshProjects();
+        renderApp();
+        toast(model.form.id ? 'Project updated' : 'Project created', 'success');
+      } catch (e) {
+        model.err = e.message || 'Save failed';
+      } finally {
+        model.saving = false;
+        redraw();
+      }
+    }
+
+    async function archiveProject(project, archived) {
+      const action = archived ? 'archive' : 'unarchive';
+      if (!confirm(`Are you sure you want to ${action} "${project.name}"?`)) return;
+      try {
+        await API.updateProject(project.id, { archived });
+        if (archived && state.filterProject == project.id) state.filterProject = null;
+        const [projects, tasks] = await Promise.all([API.listProjects(), API.listTasks()]);
+        state.projects = projects.projects;
+        state.tasks = tasks.tasks;
+        await refreshProjects();
+        renderApp();
+        toast(`Project ${archived ? 'archived' : 'restored'}`, 'success');
+      } catch (e) {
+        toast(e.message || 'Update failed', 'error');
+      }
+    }
+
+    async function deleteProject(project) {
+      const detail = model.projectDetails[project.id];
+      const warning = detail ? `This project has ${detail.task_count || 0} tasks.` : '';
+      if (!confirm(`Delete "${project.name}" permanently?\n${warning}\nThis cannot be undone.`)) return;
+      try {
+        await API.deleteProject(project.id, false);
+      } catch (e) {
+        if (e.status === 409) {
+          const msg = `${e.body?.error || 'Project has work linked to it.'}\nUse archive instead.`;
+          toast(msg, 'error');
+          return;
+        }
+        toast(e.message || 'Delete failed', 'error');
+        return;
+      }
+      const [projects, tasks] = await Promise.all([API.listProjects(), API.listTasks()]);
+      state.projects = projects.projects;
+      state.tasks = tasks.tasks;
+      if (state.filterProject == project.id) state.filterProject = null;
+      await refreshProjects();
+      renderApp();
+      toast('Project deleted', 'success');
+    }
+
+    function redraw() {
+      modal.replaceChildren();
+      modal.appendChild(h('div', { class: 'settings-head' },
+        Icon('settings', 15),
+        h('div', { class: 'settings-title' }, 'Admin settings'),
+        h('button', { class: 'btn btn-ghost', onClick: close }, Icon('x', 14), ' Close'),
+      ));
+
+      const body = h('div', { class: 'settings-body' });
+      modal.appendChild(body);
+
+      const head = h('div', { class: 'settings-section-head' },
+        h('div', null,
+          h('h3', null, 'Projects'),
+          h('div', { class: 'sub' }, 'Create, edit, archive, and review projects. Archived projects are hidden from the sidebar by default.'),
+        ),
+        h('label', { class: 'check-row', style: { whiteSpace: 'nowrap' } },
+          h('input', {
+            type: 'checkbox',
+            checked: model.includeArchived,
+            onChange: e => { model.includeArchived = !!e.target.checked; refreshProjects(); },
+          }),
+          ' Show archived',
+        ),
+      );
+      body.appendChild(head);
+
+      const form = h('div', { class: 'settings-form' });
+      form.appendChild(h('div', null,
+        h('label', null, 'Project name'),
+        h('input', { type: 'text', value: model.form.name, onInput: e => { model.form.name = e.target.value; } }),
+      ));
+      form.appendChild(h('div', null,
+        h('label', null, 'Key prefix'),
+        h('input', { type: 'text', maxlength: 8, value: model.form.key_prefix, onInput: e => { model.form.key_prefix = e.target.value; } }),
+      ));
+      const colorWrap = h('div', { class: 'full' },
+        h('label', null, 'Color'),
+        h('div', { class: 'palette' }, colors.map(c => h('button', {
+          class: 'swatch' + (model.form.color.toLowerCase() === c.toLowerCase() ? ' on' : ''),
+          style: { background: c },
+          title: c,
+          onClick: e => { e.preventDefault(); model.form.color = c; redraw(); },
+        }))),
+      );
+      form.appendChild(colorWrap);
+      form.appendChild(h('div', { class: 'full' },
+        h('label', null, 'Description'),
+        h('textarea', { value: model.form.description, onInput: e => { model.form.description = e.target.value; } }),
+      ));
+      form.appendChild(h('div', { class: 'full' },
+        h('label', null, 'Slack channel override (optional)'),
+        h('input', { type: 'text', placeholder: '#project-channel', value: model.form.slack_channel, onInput: e => { model.form.slack_channel = e.target.value; } }),
+      ));
+      form.appendChild(h('div', { class: 'form-foot' },
+        model.err ? h('span', { class: 'err' }, model.err) : null,
+        model.form.id ? h('button', { class: 'btn btn-ghost', onClick: () => { resetForm(); redraw(); } }, 'Cancel edit') : null,
+        h('button', { class: 'btn btn-primary', disabled: model.saving, onClick: saveProject }, model.form.id ? 'Save project' : 'Create project'),
+      ));
+      body.appendChild(form);
+
+      if (model.loading) {
+        body.appendChild(h('div', { class: 'empty' }, 'Loading projects…'));
+        return;
+      }
+      const list = h('div', { class: 'settings-list' });
+      for (const p of model.projects) {
+        const arch = !!p.archived;
+        list.appendChild(h('div', { class: 'settings-row' + (arch ? ' archived' : '') },
+          h('span', { class: 'proj-dot', style: { background: p.color, marginRight: '2px' } }),
+          h('div', { class: 'row-main' },
+            h('div', { class: 'row-title' },
+              p.name,
+              arch ? h('span', { class: 'pill muted' }, 'Archived') : null,
+            ),
+            h('div', { class: 'row-meta' },
+              h('span', { class: 'mono' }, p.key_prefix),
+              h('span', null, detailMeta(p)),
+              p.slack_channel ? h('span', null, `Slack: ${p.slack_channel}`) : null,
+            ),
+          ),
+          h('div', { class: 'row-actions' },
+            h('button', { class: 'btn btn-ghost', onClick: () => { resetForm(p); redraw(); } }, 'Edit'),
+            h('button', { class: 'btn btn-ghost', onClick: () => archiveProject(p, !arch) }, arch ? 'Unarchive' : 'Archive'),
+            h('button', { class: 'btn btn-ghost', onClick: () => deleteProject(p) }, 'Delete'),
+          ),
+        ));
+      }
+      if (!model.projects.length) list.appendChild(h('div', { class: 'empty' }, 'No projects found.'));
+      body.appendChild(list);
+    }
+
+    refreshProjects();
     redraw();
     return frag;
   }
