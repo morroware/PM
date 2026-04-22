@@ -50,7 +50,13 @@ function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus }) {
         h('span', { style: { fontSize: '12.5px', fontWeight: '600' } }, g.title),
         h('span', { class: 'mono', style: { fontSize: '11px', color: 'var(--fg-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' } }, String(g.tasks.length)),
         h('button', { class: 'btn btn-muted', style: { marginLeft: 'auto', padding: '3px 8px', fontSize: '11.5px' },
-          onClick: (e) => { e.stopPropagation(); onAddTask(state.groupBy === 'status' ? g.key : undefined); } },
+          onClick: (e) => {
+            e.stopPropagation();
+            const statusId = state.groupBy === 'status' ? g.key : undefined;
+            const projectId = state.groupBy === 'project' ? parseInt(String(g.key).slice(1), 10) : undefined;
+            const assigneeId = state.groupBy === 'assignee' ? parseInt(String(g.key).slice(1), 10) : undefined;
+            onAddTask(statusId, { projectId, assigneeId });
+          } },
           Icon('plus', 11), ' Add'),
       );
       tbl.appendChild(head);

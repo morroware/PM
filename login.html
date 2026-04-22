@@ -49,8 +49,17 @@
 (async () => {
     // Already signed in? bounce.
     try {
-        const me = (await API.me()).user;
-        if (me) { location.replace('index.html'); return; }
+        const r = await API.me();
+        if (r.user) { location.replace('index.html'); return; }
+        const hint = document.getElementById('register-hint');
+        if (hint) {
+            hint.textContent = r.allow_public_register
+                ? ''
+                : 'Ask your admin for an account — public registration is disabled.';
+            if (r.allow_public_register) {
+                hint.innerHTML = 'No account? <a href="register.html">Create one</a>.';
+            }
+        }
     } catch {}
 })();
 

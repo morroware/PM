@@ -147,11 +147,14 @@ function pm_create_task(): void {
     $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [$project]);
     if (!$proj) pm_error('Invalid project');
 
-    $pdo = pm_db();
-    $pdo->beginTransaction();
-    try {
-        // Next ref number for this project's prefix
-        $prefix = $proj['key_prefix'] ?: pm_config()['project_key'];
+    $prefix = $proj['key_prefix'] ?: pm_config()['project_key'];
+
+    // Insert the task with a retry loop. Two concurrent creators can both read
+    // the same MAX(ref)+1 and then collide on the UNIQUE(ref) constraint — on
+    // collision we recompute and try again instead of bubbling a 500.
+    $tid = null;
+    $attempts = 0;
+    while (true) {
         $maxRow = pm_fetch_one(
             "SELECT MAX(CAST(SUBSTRING_INDEX(ref, '-', -1) AS UNSIGNED)) AS m FROM tasks WHERE ref LIKE ?",
             [$prefix . '-%']
@@ -159,14 +162,25 @@ function pm_create_task(): void {
         $next = ((int)($maxRow['m'] ?? 0)) + 1;
         if ($next < 100) $next = 100; // keep ids readable
         $ref = $prefix . '-' . $next;
+        try {
+            pm_exec(
+                'INSERT INTO tasks (ref, project_id, status, title, description, priority, due, estimate, created_by)
+                 VALUES (?,?,?,?,?,?,?,?,?)',
+                [$ref, $project, $status, $title, $desc ?: null, $priority, $due ?: null, $estimate ?: null, pm_current_user_id()]
+            );
+            $tid = pm_last_id();
+            break;
+        } catch (PDOException $e) {
+            // 23000 = integrity constraint violation (duplicate ref).
+            if ($e->getCode() !== '23000' || ++$attempts >= 5) {
+                pm_error('Failed to create task: ' . $e->getMessage(), 500);
+            }
+            // brief jitter so two racers don't lock-step forever
+            usleep(random_int(1000, 5000));
+        }
+    }
 
-        pm_exec(
-            'INSERT INTO tasks (ref, project_id, status, title, description, priority, due, estimate, created_by)
-             VALUES (?,?,?,?,?,?,?,?,?)',
-            [$ref, $project, $status, $title, $desc ?: null, $priority, $due ?: null, $estimate ?: null, pm_current_user_id()]
-        );
-        $tid = pm_last_id();
-
+    try {
         foreach ($labels as $lid) {
             pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$tid, (int)$lid]);
         }
@@ -174,10 +188,8 @@ function pm_create_task(): void {
             pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$tid, (int)$uid]);
         }
         pm_log_activity(pm_current_user_id(), $tid, 'created', $title);
-        $pdo->commit();
     } catch (Throwable $e) {
-        $pdo->rollBack();
-        pm_error('Failed to create task: ' . $e->getMessage(), 500);
+        pm_error('Failed to attach task metadata: ' . $e->getMessage(), 500);
     }
     $t = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$tid]);
     pm_json(['task' => pm_task_row_to_shape($t)]);

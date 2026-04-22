@@ -3,7 +3,7 @@
 // (which happen on every state update) don't re-fetch the same comments.
 window._pmCommentsCache = window._pmCommentsCache || {};
 
-function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubtask, onDeleteTask }) {
+function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubtask, onDeleteSubtask, onDeleteTask }) {
   const scrim = h('div', { class: 'scrim light', onClick: onClose });
   const drawer = h('div', { class: 'drawer' });
   const host = document.createDocumentFragment();
@@ -223,7 +223,20 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
     }
     const subBox = h('div', { style: { background: 'var(--bg-3)', border: '1px solid var(--line)', borderRadius: '8px' } });
     sub.forEach((s, i) => {
-      subBox.appendChild(h('div', {
+      const del = h('button', {
+        class: 'icon-btn sm sub-del',
+        title: 'Delete subtask',
+        style: { opacity: '0', transition: 'opacity 0.1s' },
+        onClick: async (e) => {
+          e.stopPropagation();
+          try {
+            await onDeleteSubtask(task.id, s.id);
+            task.subtasks = (task.subtasks || []).filter(x => x.id !== s.id);
+            redraw();
+          } catch(err) { toast(err.message, 'error'); }
+        },
+      }, Icon('trash', 12));
+      const row = h('div', {
         style: {
           display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px',
           borderBottom: i === sub.length - 1 ? 'none' : '1px solid var(--line)',
@@ -236,14 +249,16 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
             redraw();
           } catch(e){toast(e.message,'error');}
         },
-        onMouseenter: e => e.currentTarget.style.background = 'var(--bg-4)',
-        onMouseleave: e => e.currentTarget.style.background = 'transparent',
+        onMouseenter: e => { e.currentTarget.style.background = 'var(--bg-4)'; del.style.opacity = '1'; },
+        onMouseleave: e => { e.currentTarget.style.background = 'transparent'; del.style.opacity = '0'; },
       },
         Checkbox(s.done, 16),
         h('span', { style: { fontSize: '13px', flex: 1,
           color: s.done ? 'var(--fg-3)' : 'var(--fg-1)',
           textDecoration: s.done ? 'line-through' : 'none' } }, s.text),
-      ));
+        del,
+      );
+      subBox.appendChild(row);
     });
     const addRow = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderTop: sub.length ? '1px solid var(--line)' : 'none' } });
     addRow.appendChild(h('div', { style: { width: '16px', height: '16px', borderRadius: '4px', border: '1.5px dashed var(--fg-4)' } }));
