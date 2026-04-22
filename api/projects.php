@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/slack_client.php';
 pm_boot();
 pm_require_auth();
 
@@ -122,9 +123,24 @@ if ($method === 'PATCH' && $id !== null) {
     );
     if (!$row) pm_error('Not found', 404);
     if (array_key_exists('archived', $body)) {
+        $nowArchived = !empty($body['archived']);
         pm_log_activity_maybe(pm_current_user_id(), null,
-            !empty($body['archived']) ? 'project_archived' : 'project_unarchived',
+            $nowArchived ? 'project_archived' : 'project_unarchived',
             $row['name']);
+        if ($nowArchived) {
+            // Slack notice so anyone tracking the workspace channel knows the
+            // project has been put to bed.
+            try {
+                if (pm_slack_event_on('project_archived')) {
+                    $channel = pm_slack_channel_for_project($row);
+                    if ($channel !== '') {
+                        $actor = pm_current_user();
+                        $who = $actor['name'] ?? 'An admin';
+                        pm_slack_post($channel, ":package: {$who} archived project *{$row['name']}*.");
+                    }
+                }
+            } catch (Throwable $_) { /* best effort */ }
+        }
     }
     pm_json(['project' => pm_project_shape($row)]);
 }
@@ -132,8 +148,22 @@ if ($method === 'PATCH' && $id !== null) {
 if ($method === 'DELETE' && $id !== null) {
     pm_require_admin();
     $row = pm_fetch_one('SELECT name FROM projects WHERE id = ?', [$id]);
+    if (!$row) pm_error('Not found', 404);
+    // Guard hard delete: if any tasks (or recurring rules) reference the
+    // project, require an explicit ?force=1 so a stray click can't wipe
+    // history. Archive is the default advice.
+    $force = !empty($_GET['force']);
+    $taskCount = (int)(pm_fetch_one('SELECT COUNT(*) AS c FROM tasks WHERE project_id = ?', [$id])['c'] ?? 0);
+    $ruleCount = (int)(pm_fetch_one('SELECT COUNT(*) AS c FROM recurring_rules WHERE project_id = ?', [$id])['c'] ?? 0);
+    if (($taskCount > 0 || $ruleCount > 0) && !$force) {
+        pm_json([
+            'error'       => 'Project has existing work. Archive instead, or re-send with force=1.',
+            'task_count'  => $taskCount,
+            'rule_count'  => $ruleCount,
+        ], 409);
+    }
     pm_exec('DELETE FROM projects WHERE id = ?', [$id]);
-    if ($row) pm_log_activity_maybe(pm_current_user_id(), null, 'project_deleted', $row['name']);
+    pm_log_activity_maybe(pm_current_user_id(), null, 'project_deleted', $row['name']);
     pm_json(['ok' => true]);
 }
 

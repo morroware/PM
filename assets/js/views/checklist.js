@@ -99,6 +99,10 @@ function ChecklistItem(task, { isLast, onOpen, onToggleStatus, onToggleSubtask }
       h('span', { style: { width: '6px', height: '6px', borderRadius: '2px', background: proj.color } }),
       proj.name));
     if (task.due) metaRow.appendChild(DueDate(task.due, true));
+    if (task.comments > 0) metaRow.appendChild(h('span', {
+      class: 'hstack', title: task.comments + ' comment' + (task.comments === 1 ? '' : 's'),
+      style: { gap: '3px' }
+    }, Icon('message', 11), String(task.comments)));
     if (sub.length > 0) {
       metaRow.appendChild(h('button', {
         onClick: (e) => { e.stopPropagation(); expanded = !expanded; redraw(); },

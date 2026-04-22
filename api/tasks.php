@@ -204,6 +204,14 @@ function pm_update_task(int $id): void {
     if (!$t) pm_error('Not found', 404);
     $body = pm_body();
 
+    // Snapshot the old assignees so we can detect *newly added* ones and fire
+    // a Slack task_assigned event for each, while avoiding duplicate pings to
+    // someone who was already on the task.
+    $prevAssignees = [];
+    foreach (pm_fetch_all('SELECT user_id FROM task_assignees WHERE task_id = ?', [$id]) as $r) {
+        $prevAssignees[] = (int)$r['user_id'];
+    }
+
     $fields = [];
     $params = [];
     foreach (['title','description','status','estimate','due'] as $col) {
@@ -231,10 +239,13 @@ function pm_update_task(int $id): void {
             pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$id, (int)$lid]);
         }
     }
+    $newlyAssigned = [];
     if (array_key_exists('assignees', $body) && is_array($body['assignees'])) {
         pm_exec('DELETE FROM task_assignees WHERE task_id = ?', [$id]);
         foreach ($body['assignees'] as $uid) {
-            pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$id, (int)$uid]);
+            $uid = (int)$uid;
+            pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$id, $uid]);
+            if (!in_array($uid, $prevAssignees, true)) $newlyAssigned[] = $uid;
         }
     }
 
@@ -255,6 +266,16 @@ function pm_update_task(int $id): void {
         if (!empty($t['recurring_rule_id'])) {
             pm_generate_next_recurring_task((int)$t['recurring_rule_id']);
         }
+    }
+    if ($newlyAssigned) {
+        $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$t['project_id']]);
+        $names = [];
+        foreach ($newlyAssigned as $uid) {
+            $u = pm_fetch_one('SELECT name FROM users WHERE id = ?', [$uid]);
+            if ($u) $names[] = $u['name'];
+        }
+        $verb = 'assigned ' . (count($names) ? implode(', ', $names) : 'someone');
+        pm_slack_notify_task_event($t, $proj, 'task_assigned', $verb);
     }
 
     pm_json(['task' => pm_task_row_to_shape($t)]);

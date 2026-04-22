@@ -108,6 +108,10 @@ function ListRow(task, onOpen, onToggleStatus) {
   const labelsCell = h('div', { class: 'hstack', style: { gap: '3px', flexWrap: 'wrap' } });
   task.labels.slice(0, 2).forEach(l => labelsCell.appendChild(Tag(l, true)));
   if (task.labels.length > 2) labelsCell.appendChild(h('span', { style: { fontSize: '10.5px', color: 'var(--fg-3)' } }, '+' + (task.labels.length - 2)));
+  if (task.comments > 0) labelsCell.appendChild(h('span', {
+    class: 'hstack', title: task.comments + ' comment' + (task.comments === 1 ? '' : 's'),
+    style: { gap: '3px', fontSize: '10.5px', color: 'var(--fg-3)' }
+  }, Icon('message', 11), String(task.comments)));
   row.appendChild(labelsCell);
 
   row.appendChild(AvatarStack(task.assignees, 3, 22));
