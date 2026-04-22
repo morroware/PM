@@ -11,8 +11,7 @@ function renderKanban(tasks, { onOpenTask, onMoveTask, onAddTask }) {
       h('span', { style: { fontSize: '12.5px', fontWeight: '600', letterSpacing: '-0.01em' } }, s.name),
       h('span', { class: 'mono', style: { fontSize: '11px', color: 'var(--fg-3)', background: 'var(--bg-3)', padding: '1px 6px', borderRadius: '4px' } }, String(colTasks.length)),
       h('div', { style: { marginLeft: 'auto', display: 'flex', gap: '2px' } },
-        h('button', { class: 'icon-btn sm', onClick: () => onAddTask(s.id) }, Icon('plus', 13)),
-        h('button', { class: 'icon-btn sm' }, Icon('more', 13)),
+        h('button', { class: 'icon-btn sm', title: 'Add task to ' + s.name, onClick: () => onAddTask(s.id) }, Icon('plus', 13)),
       ),
     );
 

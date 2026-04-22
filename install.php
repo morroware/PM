@@ -3,7 +3,7 @@
 // Creates tables, seeds default projects/labels/statuses, and creates the first admin user.
 // DELETE THIS FILE after running once.
 
-require_once __DIR__ . '/api/db.php';
+require_once __DIR__ . '/api/bootstrap.php';
 
 $errors  = [];
 $ok      = [];
@@ -12,24 +12,49 @@ $cfg     = null;
 
 try { $cfg = pm_config(); } catch (Throwable $e) { $errors[] = $e->getMessage(); }
 
+// Start a session so we can detect an already-logged-in admin.
+if (!$errors && session_status() === PHP_SESSION_NONE) {
+    $c = pm_config();
+    session_name($c['session_name']);
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path'     => '/',
+        'secure'   => !empty($c['cookie_secure']),
+        'httponly' => true,
+        'samesite' => $c['cookie_samesite'] ?? 'Lax',
+    ]);
+    session_start();
+}
+
 // Guard: if an admin already exists, require them to log in before re-running.
 $adminExists = false;
+$currentAdmin = null;
 if (!$errors) {
     try {
         pm_db();
         $row = pm_fetch_one("SELECT COUNT(*) AS c FROM users WHERE is_admin = 1");
         $adminExists = !empty($row) && (int)$row['c'] > 0;
+        if ($adminExists) {
+            $currentAdmin = pm_current_user();
+            if ($currentAdmin && empty($currentAdmin['is_admin'])) $currentAdmin = null;
+        }
     } catch (Throwable $e) {
         // tables probably don't exist yet — that's fine
         $adminExists = false;
     }
 }
 
+// Block privileged actions once an admin exists unless the caller IS an admin.
+// Prevents anyone who stumbles onto install.php from seizing the app.
+$installLocked = $adminExists && !$currentAdmin;
+
 // -- Form submission --
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$errors) {
     $action = $_POST['action'] ?? '';
 
-    if ($action === 'install') {
+    if ($installLocked) {
+        $errors[] = 'This app has already been installed. Sign in as an admin on login.html before re-running, or delete install.php.';
+    } elseif ($action === 'install') {
         try {
             pm_install_schema();
             pm_seed_defaults();
@@ -37,9 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$errors) {
         } catch (Throwable $e) {
             $errors[] = 'Install failed: ' . $e->getMessage();
         }
-    }
-
-    if ($action === 'create_admin') {
+    } elseif ($action === 'create_admin') {
         $name  = trim($_POST['name']  ?? '');
         $email = strtolower(trim($_POST['email'] ?? ''));
         $pass  = $_POST['password']   ?? '';
@@ -154,17 +177,17 @@ function pm_install_schema(): void {
         "CREATE TABLE IF NOT EXISTS comments (
             id INT AUTO_INCREMENT PRIMARY KEY,
             task_id INT NOT NULL,
-            user_id INT NOT NULL,
+            user_id INT NULL,
             body TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_cmt_task (task_id),
             CONSTRAINT fk_cmt_task FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-            CONSTRAINT fk_cmt_user FOREIGN KEY (user_id) REFERENCES users(id)
+            CONSTRAINT fk_cmt_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
         "CREATE TABLE IF NOT EXISTS activity (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
+            user_id INT NULL,
             task_id INT NULL,
             action VARCHAR(40) NOT NULL,
             detail VARCHAR(500) NULL,
@@ -174,6 +197,34 @@ function pm_install_schema(): void {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     ];
     foreach ($sql as $q) $pdo->exec($q);
+
+    // Re-run safe migrations for installs created before this version.
+    pm_migrate_comment_user_nullable();
+}
+
+function pm_migrate_comment_user_nullable(): void {
+    $pdo = pm_db();
+    try {
+        $row = pm_fetch_one("SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
+                             WHERE TABLE_SCHEMA = DATABASE()
+                               AND TABLE_NAME   = 'comments'
+                               AND COLUMN_NAME  = 'user_id'");
+        if ($row && strtoupper((string)$row['IS_NULLABLE']) === 'NO') {
+            // Drop & re-add the FK with ON DELETE SET NULL, and make column nullable.
+            // Constraint name matches the one defined in pm_install_schema().
+            try { $pdo->exec('ALTER TABLE comments DROP FOREIGN KEY fk_cmt_user'); } catch (Throwable $_) {}
+            $pdo->exec('ALTER TABLE comments MODIFY user_id INT NULL');
+            $pdo->exec('ALTER TABLE comments
+                        ADD CONSTRAINT fk_cmt_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL');
+        }
+        $row = pm_fetch_one("SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
+                             WHERE TABLE_SCHEMA = DATABASE()
+                               AND TABLE_NAME   = 'activity'
+                               AND COLUMN_NAME  = 'user_id'");
+        if ($row && strtoupper((string)$row['IS_NULLABLE']) === 'NO') {
+            pm_db()->exec('ALTER TABLE activity MODIFY user_id INT NULL');
+        }
+    } catch (Throwable $_) { /* best effort */ }
 }
 
 function pm_seed_defaults(): void {
@@ -240,6 +291,14 @@ a { color: #60A5FA; }
 <?php foreach ($errors as $e): ?><div class="err"><?= htmlspecialchars($e) ?></div><?php endforeach; ?>
 <?php foreach ($ok as $m): ?><div class="ok"><?= htmlspecialchars($m) ?></div><?php endforeach; ?>
 
+<?php if ($installLocked): ?>
+    <div class="warn">
+        This installer is <strong>locked</strong>: an admin already exists.
+        <a href="login.html">Sign in as an admin</a> first, then return here.
+        Better yet — delete <code>install.php</code> and you&rsquo;re done.
+    </div>
+<?php endif; ?>
+
 <div class="card">
     <h2>1. Verify database connection</h2>
     <?php if ($cfg): ?>
@@ -253,14 +312,20 @@ a { color: #60A5FA; }
 <div class="card">
     <h2>2. Create tables + seed defaults</h2>
     <p style="color:#8A94A8;font-size:13px;margin:0 0 8px;">Creates all tables and seeds 5 projects + 8 labels from the original mockup. Safe to re-run.</p>
-    <form method="post"><input type="hidden" name="action" value="install"><button class="btn" type="submit">Run install</button></form>
+    <form method="post">
+        <input type="hidden" name="action" value="install">
+        <button class="btn" type="submit"<?= $installLocked ? ' disabled style="opacity:.5;cursor:not-allowed"' : '' ?>>Run install</button>
+    </form>
 </div>
 
 <div class="card">
     <h2>3. Create the first admin user</h2>
-    <?php if ($adminExists): ?>
-        <div class="warn">At least one admin already exists. You can still create another, or log in.</div>
+    <?php if ($adminExists && !$installLocked): ?>
+        <div class="warn">At least one admin already exists. You can still create another.</div>
     <?php endif; ?>
+    <?php if ($installLocked): ?>
+        <p style="color:#8A94A8;font-size:13px;margin:0;">Locked — see the warning above.</p>
+    <?php else: ?>
     <form method="post">
         <input type="hidden" name="action" value="create_admin">
         <label>Your name</label>
@@ -271,6 +336,7 @@ a { color: #60A5FA; }
         <input type="password" name="password" required minlength="8">
         <button class="btn" type="submit">Create admin</button>
     </form>
+    <?php endif; ?>
 </div>
 
 <div class="card">

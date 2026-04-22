@@ -3,13 +3,12 @@ function renderChecklist(tasks, { onOpenTask, onToggleStatus, onToggleSubtask })
   const meId = window.state.me.id;
   const myTasks = tasks.filter(t => t.assignees.includes(meId));
   const t = today();
-  const iso = d => d.toISOString().slice(0,10);
 
   const groups = [
     { key: 'overdue',  title: 'Overdue',          desc: 'needs attention',    color: '#EF4444',
       items: myTasks.filter(x => x.status !== 'done' && x.due && parseISO(x.due) < t) },
     { key: 'today',    title: 'Today',            desc: t.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' }), color: '#F59E0B',
-      items: myTasks.filter(x => x.due === iso(t) && x.status !== 'done') },
+      items: myTasks.filter(x => x.due === ymd(t) && x.status !== 'done') },
     { key: 'tomorrow', title: 'Tomorrow',         desc: '',                   color: '#3B82F6',
       items: myTasks.filter(x => x.due === daysFromNow(1) && x.status !== 'done') },
     { key: 'thisweek', title: 'Later this week',  desc: '',                   color: '#A855F7',
@@ -68,13 +67,15 @@ function renderChecklist(tasks, { onOpenTask, onToggleStatus, onToggleSubtask })
 function ChecklistItem(task, { isLast, onOpen, onToggleStatus, onToggleSubtask }) {
   const proj = projectById(task.project);
   const sub = task.subtasks || [];
-  const subDone = sub.filter(s => s.done).length;
   const done = task.status === 'done';
   let expanded = false;
 
   const wrap = h('div', { style: { borderBottom: isLast ? 'none' : '1px solid var(--line)' } });
 
   function redraw() {
+    // Recompute each redraw so the "X/Y subtasks" counter stays live as
+    // subtasks are toggled from the expanded list below.
+    const subDone = sub.filter(s => s.done).length;
     wrap.replaceChildren();
     const head = h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '12px 14px' } });
 
