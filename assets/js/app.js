@@ -37,6 +37,44 @@
   const saved = localStorage.getItem('pm_project');
   if (saved && saved !== 'null') state.filterProject = parseInt(saved, 10);
 
+  function taskIdFromHash() {
+    const m = (location.hash || '').match(/^#task=(\d+)$/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  function setTaskHash(taskId) {
+    if (taskId) {
+      const next = `#task=${taskId}`;
+      if (location.hash !== next) history.replaceState(null, '', next);
+      return;
+    }
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  function syncTaskFromHash() {
+    const hashId = taskIdFromHash();
+    if (!hashId) {
+      if (state.openTaskId !== null) {
+        state.openTaskId = null;
+        renderApp();
+      }
+      return;
+    }
+    const exists = state.tasks.some(t => t.id === hashId);
+    if (!exists) {
+      if (state.openTaskId !== null) {
+        state.openTaskId = null;
+        renderApp();
+      }
+      setTaskHash(null);
+      return;
+    }
+    if (state.openTaskId !== hashId) {
+      state.openTaskId = hashId;
+      renderApp();
+    }
+  }
+
   // Activity is fetched at boot and re-fetched (debounced) whenever something
   // in the UI makes a change that might produce a server-side activity row.
   // We keep it cheap: only the dashboard actually consumes it.
@@ -114,13 +152,16 @@
     if (state.openTaskId) {
       const t = state.tasks.find(x => x.id === state.openTaskId);
       if (t) rootEl.appendChild(renderTaskDetail(t, {
-        onClose: () => { state.openTaskId = null; renderApp(); },
+        onClose: () => { state.openTaskId = null; setTaskHash(null); renderApp(); },
         onUpdate: updateTask,
         onToggleSubtask: toggleSubtask,
         onAddSubtask: addSubtask,
         onDeleteTask: deleteTask,
       }));
-      else state.openTaskId = null;
+      else {
+        state.openTaskId = null;
+        setTaskHash(null);
+      }
     }
     if (state.quickAddOpen) rootEl.appendChild(renderQuickAdd());
   }
@@ -249,7 +290,7 @@
 
     const tasks = filteredTasks();
     const handlers = {
-      onOpenTask: (id) => { state.openTaskId = id; renderApp(); },
+      onOpenTask: (id) => { state.openTaskId = id; setTaskHash(id); renderApp(); },
       onAddTask: (statusId) => { state.quickAddStatus = statusId || 'todo'; state.quickAddOpen = true; renderApp(); },
       onMoveTask: (id, s) => moveTask(id, s),
       onToggleStatus: id => toggleStatus(id),
@@ -515,6 +556,11 @@
       renderApp();
     }
   });
+
+  window.addEventListener('hashchange', syncTaskFromHash);
+
+  // Support direct links copied from the detail drawer, e.g. #task=123.
+  syncTaskFromHash();
 
   renderApp();
 })();
