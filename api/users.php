@@ -24,7 +24,14 @@ if ($method === 'PATCH' && $id !== null) {
     $body = pm_body();
     $f=[]; $p=[];
     if (isset($body['role']))    { $f[]='role = ?';    $p[]=(string)$body['role']; }
-    if (isset($body['name']))    { $f[]='name = ?';    $p[]=trim((string)$body['name']); }
+    if (isset($body['name'])) {
+        $name = trim((string)$body['name']);
+        if ($name === '') pm_error('Name cannot be empty');
+        if (mb_strlen($name) > 120) pm_error('Name is too long');
+        $initials = pm_make_initials($name);
+        $f[]='name = ?';    $p[]=$name;
+        $f[]='initials = ?'; $p[]=$initials;
+    }
     if (isset($body['color'])) {
         $c = (string)$body['color'];
         if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $c)) pm_error('Invalid color');
@@ -49,3 +56,10 @@ if ($method === 'PATCH' && $id !== null) {
 }
 
 pm_error('Method not allowed', 405);
+
+function pm_make_initials(string $name): string {
+    $parts = preg_split('/\s+/', trim($name));
+    if (!$parts) return '??';
+    if (count($parts) === 1) return strtoupper(mb_substr($parts[0], 0, 2));
+    return strtoupper(mb_substr($parts[0], 0, 1) . mb_substr(end($parts), 0, 1));
+}
