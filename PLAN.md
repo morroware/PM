@@ -376,3 +376,137 @@ For each shipped milestone, update:
 - **Permission bugs** in new admin UI → explicit role tests for every write endpoint.
 - **UI regressions** due to expanded state complexity → mandatory regression checklist before release.
 - **Recurrence edge cases** (DST, month-end, leap year, missed runs) → canonical scheduling rules + deterministic tests.
+
+---
+
+## 14) Current state review (codebase snapshot)
+
+Snapshot based on current repository implementation.
+
+### 14.1 Already implemented (baseline to preserve)
+
+- **Core app shell + multi-view task management exists**: dashboard, kanban, list, checklist, calendar, task drawer, filters/search, and activity polling hooks are wired in vanilla JS.
+- **Project lifecycle is partially upgraded already**:
+  - Project create/read/update/delete endpoints exist.
+  - Archiving and `archived_at` exist.
+  - Optional `description` and `slack_channel` exist.
+  - Hard-delete guard rails exist (`force=1` required when tasks/rules are linked).
+- **Label model is partially upgraded already**:
+  - Label create/read/update/delete exists.
+  - Project-scoped labels (`project_id`) and `archived` flag exist.
+  - Duplicate-prevention by scope exists on create.
+- **Comments are implemented and surfaced in UI**:
+  - Comment CRUD route support (create/list in task detail).
+  - Comment counts are included in task payload and displayed in list rows.
+- **Slack integration foundation exists**:
+  - Admin-only Slack settings endpoint exists.
+  - Event toggle model exists (`task_completed`, `task_created`, `task_assigned`, `comment_added`, `project_archived`).
+  - Test message flow and last-error/last-ok telemetry fields exist.
+- **Recurring tasks foundation exists**:
+  - `recurring_rules` table and CRUD API exist.
+  - Cadences implemented (`daily/weekly/monthly/yearly`) with interval and end controls.
+  - Lazy generation hook is integrated when a recurring task is marked done.
+
+### 14.2 Partially implemented / gaps to close
+
+- **No dedicated Admin/Settings UI yet** for projects, labels, users, Slack, and recurring rules; many features are API-capable but not first-class in product UX.
+- **Comment collaboration parity is incomplete** (edit/delete own comments, moderation, and @mentions are not complete end-to-end).
+- **Slack delivery reliability is basic**; we still need explicit retry/backoff policy definition, stronger diagnostics UI, and template customization.
+- **Workflow customization is not exposed** (project-specific statuses, required fields by transition, and task templates).
+- **Saved views, bulk operations, advanced reporting, and automation rules** are not yet implemented.
+- **Regression process is still mostly manual and not codified into a release gate checklist in-repo.**
+
+### 14.3 Architectural constraints confirmed
+
+- No build tooling/framework dependency has been introduced.
+- Backend remains endpoint-per-file PHP + PDO with cPanel-compatible deployment assumptions.
+- Migration pattern remains idempotent via `install.php` helpers.
+
+---
+
+## 15) Completed implementation plan (execution-ready)
+
+Use this as the canonical delivery plan going forward.
+
+### Phase 0 — Stabilize and baseline (1 sprint)
+
+1. Create `docs/regression-checklist.md` with release-gate smoke tests.
+2. Add API/UI wiring verification checklist (auth, task CRUD, comments, subtasks, labels, projects, recurring, Slack test).
+3. Add explicit role-boundary checks (admin/member) and expected HTTP status outcomes.
+4. Add a short “known-good seed data” recipe for manual QA.
+
+**Definition of done:** Every release runs a repeatable checklist with pass/fail outcomes recorded.
+
+### Phase 1 — Admin settings surface (1–2 sprints)
+
+1. Add a new in-app **Settings/Admin** area.
+2. Implement project management UI:
+   - create/edit/archive/unarchive
+   - optional color/key/description/slack channel
+   - archive confirmation with task/rule impact summary
+3. Implement label management UI:
+   - create/edit/archive/unarchive
+   - global vs project-scoped labels
+   - in-use count + safe-archive prompts
+4. Add recurring rules management UI (list/create/edit/pause/delete).
+5. Add Slack settings UI (token save/rotate, test connection, event toggles, default channel).
+
+**Definition of done:** All already-supported admin APIs are reachable from UI without external tools.
+
+### Phase 2 — Collaboration hardening (1 sprint)
+
+1. Upgrade comments:
+   - edit/delete own comments
+   - admin moderation controls
+   - stronger thread UX for long discussions (pagination/load-more)
+2. Add comment badges in remaining views where absent.
+3. Add mention parsing and mention notification model (in-app first, Slack optional).
+
+**Definition of done:** Comment workflows are consistent across task entry points and safe for team-scale usage.
+
+### Phase 3 — Slack reliability + customization (1 sprint)
+
+1. Add per-event delivery status history visible in admin diagnostics.
+2. Add bounded retry strategy for transient Slack API failures.
+3. Add per-project channel overrides in settings UX.
+4. Add simple template placeholders for message customization.
+
+**Definition of done:** Slack failures are observable, non-blocking, and operationally manageable.
+
+### Phase 4 — Productivity parity features (2 sprints)
+
+1. Saved views/filters per user.
+2. Bulk operations (status/assignee/labels/due date).
+3. Configurable status workflow per project.
+4. Task templates.
+5. Calendar interaction upgrades (drag-to-reschedule).
+
+**Definition of done:** Teams can model distinct project workflows and execute high-volume edits efficiently.
+
+### Phase 5 — Reporting + automations (1–2 sprints)
+
+1. Workload and progress reporting refinements.
+2. Rule-lite automations with guarded triggers/actions.
+3. Recurring reminder windows (timezone-aware, quiet-hours aware).
+
+**Definition of done:** Operational visibility and low-code automations support routine project management at scale.
+
+---
+
+## 16) Priority matrix (current)
+
+### Must-have next
+
+- Regression checklist in-repo.
+- Settings/Admin UI for existing project/label/slack/recurring capabilities.
+- Comment edit/delete + moderation.
+
+### Should-have next
+
+- Slack diagnostics + retries + template controls.
+- Saved views + bulk edit operations.
+
+### Could-have after
+
+- Workflow-required fields by transition.
+- Advanced reporting and automation/rule engine.
