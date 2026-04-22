@@ -254,16 +254,28 @@ function assigneePickerContent(selectedIds, onToggle, close) {
   return wrap;
 }
 
-function labelPickerContent(selectedIds, onToggle, close, { keepOpen = false } = {}) {
+function labelPickerContent(selectedIds, onToggle, close, { keepOpen = false, scopeProjectId = null, onCreateLabel = null } = {}) {
   const wrap = h('div');
   const input = h('input', { placeholder: 'Find labels...', autofocus: true });
   wrap.appendChild(h('div', { class: 'pop-search' }, input));
   wrap.appendChild(h('div', { class: 'popover-header' }, 'Labels'));
   const list = h('div');
   wrap.appendChild(list);
+  async function createFromQuery(name) {
+    if (typeof onCreateLabel !== 'function') return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await onCreateLabel(trimmed, scopeProjectId);
+    input.value = '';
+  }
+  function inScope(l) {
+    if (scopeProjectId == null) return true;
+    return l.project_id == null || l.project_id == scopeProjectId;
+  }
   function render(query = '') {
     list.replaceChildren();
-    const labels = S().labels.filter(l => l.name.toLowerCase().includes(query.toLowerCase()));
+    const q = query.toLowerCase();
+    const labels = S().labels.filter(l => !l.archived && inScope(l) && l.name.toLowerCase().includes(q));
     for (const l of labels) {
       list.appendChild(PopoverItem({
         selected: selectedIds.includes(l.id),
@@ -271,8 +283,28 @@ function labelPickerContent(selectedIds, onToggle, close, { keepOpen = false } =
         leading: Tag(l.id),
       }));
     }
+    const exact = labels.some(l => l.name.toLowerCase() === q);
+    if (q && !exact && typeof onCreateLabel === 'function') {
+      list.appendChild(PopoverItem({
+        selected: false,
+        onSelect: async () => {
+          try { await createFromQuery(query); if (!keepOpen) close(); else render(''); }
+          catch (e) { toast(e.message || 'Could not create label', 'error'); }
+        },
+        leading: Icon('plus', 12),
+        children: h('span', null, `Create label "${query.trim()}"`),
+      }));
+    }
+    if (!labels.length && !q) list.appendChild(h('div', { class: 'empty', style: { padding: '10px' } }, 'No labels'));
   }
   input.addEventListener('input', e => render(e.target.value));
+  input.addEventListener('keydown', async e => {
+    if (e.key === 'Enter' && typeof onCreateLabel === 'function' && input.value.trim()) {
+      e.preventDefault();
+      try { await createFromQuery(input.value); if (!keepOpen) close(); else render(''); }
+      catch (err) { toast(err.message || 'Could not create label', 'error'); }
+    }
+  });
   render();
   return wrap;
 }

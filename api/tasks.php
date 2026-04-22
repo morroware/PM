@@ -134,6 +134,28 @@ function pm_get_task(int $id): void {
     pm_json(['task' => pm_task_row_to_shape($t)]);
 }
 
+function pm_validate_label_ids_for_project(array $labelIds, int $projectId): array {
+    $clean = array_values(array_unique(array_map('intval', $labelIds)));
+    if (!$clean) return [];
+    $ph = implode(',', array_fill(0, count($clean), '?'));
+    $params = array_merge($clean, [$projectId]);
+    $rows = pm_fetch_all(
+        "SELECT id FROM labels
+         WHERE id IN ($ph)
+           AND archived = 0
+           AND (project_id IS NULL OR project_id = ?)",
+        $params
+    );
+    $ok = array_map(fn($r) => (int)$r['id'], $rows);
+    sort($ok);
+    $want = $clean;
+    sort($want);
+    if ($ok !== $want) {
+        pm_error('One or more labels are invalid, archived, or out of project scope', 409);
+    }
+    return $clean;
+}
+
 function pm_create_task(): void {
     $title = trim((string)pm_param('title', ''));
     if ($title === '') pm_error('Title required');
@@ -149,6 +171,8 @@ function pm_create_task(): void {
 
     $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [$project]);
     if (!$proj) pm_error('Invalid project');
+
+    $labels = pm_validate_label_ids_for_project($labels, $project);
 
     $prefix = $proj['key_prefix'] ?: pm_config()['project_key'];
 
@@ -234,8 +258,10 @@ function pm_update_task(int $id): void {
     }
 
     if (array_key_exists('labels', $body) && is_array($body['labels'])) {
+        $labelProject = array_key_exists('project', $body) ? (int)$body['project'] : (int)$t['project_id'];
+        $validLabels = pm_validate_label_ids_for_project($body['labels'], $labelProject);
         pm_exec('DELETE FROM task_labels WHERE task_id = ?', [$id]);
-        foreach ($body['labels'] as $lid) {
+        foreach ($validLabels as $lid) {
             pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$id, (int)$lid]);
         }
     }

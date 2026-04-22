@@ -1,5 +1,12 @@
 # Product Upgrade Plan (Customization + Reliability)
 
+## Progress snapshot (updated April 22, 2026)
+
+- ✅ **Phase 1 (stabilization):** regression checklist and end-to-end verification document exist in `docs/regression-checklist.md`.
+- ✅ **Phase 2 (project management):** project CRUD, archive/unarchive, and admin project settings UI are implemented.
+- ✅ **Phase 3 (labels/taxonomy):** label scope (global/project), duplicate protection by scope, usage-aware governance, merge/archive flows, typeahead label creation in task flows, and list-view bulk add/remove label operations are now implemented.
+- 🔄 **Phases 4–7:** partially implemented in codebase, but still planned for completion/hardening per sections below.
+
 This plan replaces the prior “known gaps only” scope with a full product upgrade roadmap focused on:
 
 1. **Project customization** (create/rename/archive projects, richer labels, configurable workflows)

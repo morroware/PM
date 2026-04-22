@@ -1,15 +1,35 @@
 // List / table view grouped by status/project/assignee.
-function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus }) {
+function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus, onBulkLabels }) {
   const root = h('div', { style: { padding: '16px 20px' } });
-  const state = { groupBy: 'status', sortBy: 'priority', collapsed: {} };
+  const state = { groupBy: 'status', sortBy: 'priority', collapsed: {}, selected: new Set() };
 
   function redraw() {
     root.replaceChildren();
-    root.appendChild(h('div', { style: { display: 'flex', gap: '8px', marginBottom: '14px' } },
+    root.appendChild(h('div', { style: { display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' } },
       Segmented('Group by', state.groupBy, v => { state.groupBy = v; redraw(); },
         [['status','Status'],['project','Project'],['assignee','Assignee']]),
       Segmented('Sort', state.sortBy, v => { state.sortBy = v; redraw(); },
         [['priority','Priority'],['due','Due'],['title','Title']]),
+      state.selected.size ? h('div', { class: 'hstack', style: {
+        marginLeft: 'auto', gap: '6px', background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: '8px', padding: '3px 6px',
+      } },
+        h('span', { style: { fontSize: '12px', color: 'var(--fg-2)', marginRight: '4px' } }, `${state.selected.size} selected`),
+        h('button', { class: 'btn btn-ghost', style: { padding: '4px 8px', fontSize: '12px' }, onClick: (e) => {
+          openPopover(e.currentTarget, ({close}) => labelPickerContent([], lid => {
+            onBulkLabels?.([...state.selected], [lid], 'add')
+              .then(() => { close(); state.selected.clear(); redraw(); })
+              .catch(err => toast(err.message || 'Bulk update failed', 'error'));
+          }, close, { keepOpen: true }));
+        } }, 'Add label'),
+        h('button', { class: 'btn btn-ghost', style: { padding: '4px 8px', fontSize: '12px' }, onClick: (e) => {
+          openPopover(e.currentTarget, ({close}) => labelPickerContent([], lid => {
+            onBulkLabels?.([...state.selected], [lid], 'remove')
+              .then(() => { close(); state.selected.clear(); redraw(); })
+              .catch(err => toast(err.message || 'Bulk update failed', 'error'));
+          }, close, { keepOpen: true }));
+        } }, 'Remove label'),
+        h('button', { class: 'btn btn-ghost', style: { padding: '4px 8px', fontSize: '12px' }, onClick: () => { state.selected.clear(); redraw(); } }, 'Clear'),
+      ) : null,
     ));
 
     let groups = [];
@@ -60,7 +80,16 @@ function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus }) {
           Icon('plus', 11), ' Add'),
       );
       tbl.appendChild(head);
-      if (!isCollapsed) for (const t of g.tasks) tbl.appendChild(ListRow(t, onOpenTask, onToggleStatus));
+      if (!isCollapsed) for (const t of g.tasks) {
+        tbl.appendChild(ListRow(t, onOpenTask, onToggleStatus, {
+          selected: state.selected.has(t.id),
+          onSelect: (on) => {
+            if (on) state.selected.add(t.id);
+            else state.selected.delete(t.id);
+            redraw();
+          },
+        }));
+      }
     }
 
     root.appendChild(tbl);
@@ -82,7 +111,7 @@ function Segmented(label, value, onChange, options) {
   return wrap;
 }
 
-function ListRow(task, onOpen, onToggleStatus) {
+function ListRow(task, onOpen, onToggleStatus, { selected = false, onSelect } = {}) {
   const proj = projectById(task.project);
   const sub = task.subtasks || [];
   const subDone = sub.filter(s => s.done).length;
@@ -90,7 +119,15 @@ function ListRow(task, onOpen, onToggleStatus) {
   const done = task.status === 'done';
 
   const row = h('div', { class: 'list-row' + (done ? ' done' : ''), onClick: () => onOpen(task.id) });
-  const checkWrap = h('div', { onClick: (e) => { e.stopPropagation(); onToggleStatus(task.id); } }, Checkbox(done));
+  const checkWrap = h('div', { class: 'hstack', style: { gap: '8px' }, onClick: (e) => e.stopPropagation() },
+    h('input', {
+      type: 'checkbox',
+      checked: selected,
+      onClick: e => e.stopPropagation(),
+      onChange: e => onSelect?.(!!e.target.checked),
+    }),
+    h('div', { onClick: (e) => { e.stopPropagation(); onToggleStatus(task.id); } }, Checkbox(done)),
+  );
   row.appendChild(checkWrap);
   row.appendChild(h('span', { class: 'mono', style: { fontSize: '11px', color: 'var(--fg-3)' } }, task.ref));
 
