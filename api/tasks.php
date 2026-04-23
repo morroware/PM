@@ -605,7 +605,6 @@ function pm_generate_next_recurring_task(int $ruleId): void {
         if (!empty($rule['paused'])) return;
 
         // Decide the date we'll schedule on.
-        require_once __DIR__ . '/recurring.php';
         $base = $rule['next_run'] ?: date('Y-m-d');
         // If base is in the past, advance until it's >= today. The guard
         // counter prevents an infinite loop if pm_recurring_next_date ever
@@ -685,4 +684,50 @@ function pm_generate_next_recurring_task(int $ruleId): void {
         $created = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$tid]);
         pm_slack_notify_task_event($created, $proj, 'task_created', 'scheduled a recurring task');
     } catch (Throwable $_) { /* best effort */ }
+}
+
+function pm_recurring_next_date(string $fromYmd, array $rule): string {
+    $ts = strtotime($fromYmd . ' 00:00:00');
+    if ($ts === false) $ts = time();
+    $interval = max(1, (int)($rule['interval_n'] ?? 1));
+    switch ($rule['cadence'] ?? 'weekly') {
+        case 'daily':
+            $ts = strtotime("+{$interval} day", $ts);
+            break;
+        case 'weekly':
+            $ts = strtotime("+{$interval} week", $ts);
+            if (array_key_exists('weekday', $rule) && $rule['weekday'] !== null) {
+                $target = (int)$rule['weekday'];
+                $cur = (int)date('w', $ts);
+                $delta = ($target - $cur + 7) % 7;
+                if ($delta) $ts = strtotime("+{$delta} day", $ts);
+            }
+            break;
+        case 'monthly': {
+            $y = (int)date('Y', $ts);
+            $m = (int)date('m', $ts) + $interval;
+            while ($m > 12) { $m -= 12; $y++; }
+            $d = (array_key_exists('month_day', $rule) && $rule['month_day'] !== null)
+                ? (int)$rule['month_day']
+                : (int)date('d', $ts);
+            $lastDay = (int)date('t', strtotime(sprintf('%04d-%02d-01', $y, $m)));
+            $d = min($d, $lastDay);
+            $ts = mktime(0, 0, 0, $m, $d, $y);
+            break;
+        }
+        case 'yearly': {
+            $y = (int)date('Y', $ts) + $interval;
+            $m = (array_key_exists('month_of_year', $rule) && $rule['month_of_year'] !== null)
+                ? (int)$rule['month_of_year']
+                : (int)date('m', $ts);
+            $d = (array_key_exists('month_day', $rule) && $rule['month_day'] !== null)
+                ? (int)$rule['month_day']
+                : (int)date('d', $ts);
+            $lastDay = (int)date('t', strtotime(sprintf('%04d-%02d-01', $y, $m)));
+            $d = min($d, $lastDay);
+            $ts = mktime(0, 0, 0, $m, $d, $y);
+            break;
+        }
+    }
+    return date('Y-m-d', $ts);
 }

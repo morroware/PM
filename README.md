@@ -89,7 +89,7 @@ From the in-app **Admin settings** modal:
 - Usage-aware safeguards (archive/delete conflict handling)
 - Label merge operation to consolidate taxonomy
 
-### 7) Slack integration (API surface implemented)
+### 7) Slack integration
 
 Admin-only Slack endpoints support:
 
@@ -99,9 +99,9 @@ Admin-only Slack endpoints support:
 - Test message sending
 - Last success/error telemetry and delivery history payload support
 
-> Note: Slack management is currently API-driven (`api/slack.php`). The in-app admin modal currently focuses on projects and labels.
+Slack settings are available in the in-app **Admin settings** modal and via `api/slack.php`.
 
-### 8) Recurring tasks (API surface implemented)
+### 8) Recurring tasks
 
 Admin-only recurring rule endpoints support:
 
@@ -111,7 +111,7 @@ Admin-only recurring rule endpoints support:
 - Pause/resume behavior
 - Next-run date tracking and linkage via `tasks.recurring_rule_id`
 
-> Note: recurring rule management is currently API-driven (`api/recurring.php`).
+Recurring rule management is available in the in-app **Admin settings** modal and via `api/recurring.php`.
 
 ## Repository layout
 
@@ -225,7 +225,6 @@ Use `docs/regression-checklist.md` as release-gate verification for:
 
 ## Known limitations / next recommended work
 
-- Slack and recurring management UIs are not yet fully exposed in the in-app settings modal (APIs exist now).
 - No file attachments.
 - No realtime push transport (polling/reload patterns currently used).
 - No background worker process (intentional for shared-host compatibility).
