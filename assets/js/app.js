@@ -856,6 +856,11 @@
         id: null,
         project_id: '',
         title: '',
+        description: '',
+        priority: 2,
+        estimate: '',
+        assignees: [],
+        labels: [],
         cadence: 'weekly',
         interval_n: 1,
         weekday: '',
@@ -910,6 +915,11 @@
       model.recurringForm.id = r?.id ?? null;
       model.recurringForm.project_id = r?.project_id ? String(r.project_id) : '';
       model.recurringForm.title = r?.title ?? '';
+      model.recurringForm.description = r?.description ?? '';
+      model.recurringForm.priority = Number(r?.priority ?? 2) || 2;
+      model.recurringForm.estimate = r?.estimate ?? '';
+      model.recurringForm.assignees = Array.isArray(r?.assignees) ? r.assignees.map(Number).filter(Boolean) : [];
+      model.recurringForm.labels = Array.isArray(r?.labels) ? r.labels.map(Number).filter(Boolean) : [];
       model.recurringForm.cadence = r?.cadence ?? 'weekly';
       model.recurringForm.interval_n = Number(r?.interval_n ?? 1) || 1;
       model.recurringForm.weekday = r?.weekday == null ? '' : String(r.weekday);
@@ -919,6 +929,25 @@
       model.recurringForm.ends_on = r?.ends_on ?? '';
       model.recurringForm.occurrences_left = r?.occurrences_left == null ? '' : String(r.occurrences_left);
       model.recurringForm.paused = !!r?.paused;
+    }
+    function toggleRecurringAssignee(uid, on) {
+      const id = Number(uid);
+      if (!id) return;
+      const cur = new Set(model.recurringForm.assignees || []);
+      if (on) cur.add(id); else cur.delete(id);
+      model.recurringForm.assignees = Array.from(cur);
+    }
+    function toggleRecurringLabel(lid, on) {
+      const id = Number(lid);
+      if (!id) return;
+      const cur = new Set(model.recurringForm.labels || []);
+      if (on) cur.add(id); else cur.delete(id);
+      model.recurringForm.labels = Array.from(cur);
+    }
+    function labelsForRecurringProject() {
+      const pid = Number(model.recurringForm.project_id || 0);
+      if (!pid) return [];
+      return (state.labels || []).filter(l => !l.archived && (l.project_id == null || Number(l.project_id) === pid));
     }
 
     async function refreshProjects() {
@@ -1039,6 +1068,11 @@
       const payload = {
         project_id: Number(f.project_id),
         title: (f.title || '').trim(),
+        description: (f.description || '').trim(),
+        priority: Math.max(1, Math.min(4, Number(f.priority) || 2)),
+        estimate: (f.estimate || '').trim() || null,
+        assignees: Array.isArray(f.assignees) ? f.assignees.map(Number).filter(Boolean) : [],
+        labels: Array.isArray(f.labels) ? f.labels.map(Number).filter(Boolean) : [],
         cadence: f.cadence,
         interval_n: Math.max(1, Number(f.interval_n) || 1),
         next_run: f.next_run,
@@ -1436,12 +1470,20 @@
             }),
             key.replaceAll('_', ' '),
           ))));
-        slackForm.appendChild(h('div', { class: 'full' },
-          h('label', null, 'Template override (task_completed)'),
-          h('textarea', { value: model.slack.templates?.task_completed || '', placeholder: '{actor} marked {ref} done', onInput: e => {
-            model.slack.templates.task_completed = e.target.value;
-          } }),
-        ));
+        const eventKeys = ['task_created','task_completed','task_assigned','comment_added','project_archived','mention_added'];
+        for (const key of eventKeys) {
+          slackForm.appendChild(h('div', { class: 'full' },
+            h('label', null, `Template override (${key})`),
+            h('textarea', {
+              value: model.slack.templates?.[key] || '',
+              placeholder: '{actor} {verb} {ref}',
+              onInput: e => {
+                if (!model.slack.templates) model.slack.templates = {};
+                model.slack.templates[key] = e.target.value;
+              },
+            }),
+          ));
+        }
         slackForm.appendChild(h('div', { class: 'form-foot' },
           model.slackErr ? h('span', { class: 'err' }, model.slackErr) : null,
           h('button', { class: 'btn btn-ghost', disabled: model.saving, onClick: sendSlackTest }, 'Send test'),
@@ -1471,6 +1513,23 @@
       recurringForm.appendChild(h('div', null,
         h('label', null, 'Title'),
         h('input', { type: 'text', value: model.recurringForm.title, onInput: e => { model.recurringForm.title = e.target.value; } }),
+      ));
+      recurringForm.appendChild(h('div', { class: 'full' },
+        h('label', null, 'Description'),
+        h('textarea', { value: model.recurringForm.description, onInput: e => { model.recurringForm.description = e.target.value; } }),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Priority'),
+        h('select', { value: String(model.recurringForm.priority), onChange: e => { model.recurringForm.priority = Number(e.target.value) || 2; } },
+          h('option', { value: '1' }, 'Low'),
+          h('option', { value: '2' }, 'Medium'),
+          h('option', { value: '3' }, 'High'),
+          h('option', { value: '4' }, 'Urgent'),
+        ),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Estimate (hours)'),
+        h('input', { type: 'number', min: 0, step: '0.25', value: model.recurringForm.estimate, onInput: e => { model.recurringForm.estimate = e.target.value; } }),
       ));
       recurringForm.appendChild(h('div', null,
         h('label', null, 'Cadence'),
@@ -1517,6 +1576,31 @@
           h('input', { type: 'checkbox', checked: !!model.recurringForm.paused, onChange: e => { model.recurringForm.paused = !!e.target.checked; } }),
           'Paused',
         ),
+      ));
+      const recurringLabelOptions = labelsForRecurringProject();
+      recurringForm.appendChild(h('div', { class: 'full check-grid' },
+        h('span', { class: 'hint' }, 'Assignees'),
+        ...state.users.filter(u => !u.archived).map(u => h('label', { class: 'check-row' },
+          h('input', {
+            type: 'checkbox',
+            checked: (model.recurringForm.assignees || []).includes(u.id),
+            onChange: e => { toggleRecurringAssignee(u.id, !!e.target.checked); },
+          }),
+          u.name,
+        )),
+      ));
+      recurringForm.appendChild(h('div', { class: 'full check-grid' },
+        h('span', { class: 'hint' }, 'Labels'),
+        ...(recurringLabelOptions.length
+          ? recurringLabelOptions.map(l => h('label', { class: 'check-row' },
+              h('input', {
+                type: 'checkbox',
+                checked: (model.recurringForm.labels || []).includes(l.id),
+                onChange: e => { toggleRecurringLabel(l.id, !!e.target.checked); },
+              }),
+              `${l.name}${l.project_id == null ? ' (Global)' : ''}`,
+            ))
+          : [h('span', { class: 'hint' }, 'Select a project to choose labels')]),
       ));
       recurringForm.appendChild(h('div', { class: 'form-foot' },
         model.recurringErr ? h('span', { class: 'err' }, model.recurringErr) : null,
