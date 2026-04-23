@@ -67,6 +67,24 @@ function pm_validate_cadence_fields(array &$r): void {
         if ($r['month_of_year'] !== null) $r['month_of_year'] = max(1, min(12, (int)$r['month_of_year']));
         if ($r['month_day']     !== null) $r['month_day']     = max(1, min(31, (int)$r['month_day']));
     }
+    // Catch malformed date strings before they hit the DATE column — MariaDB
+    // silently zeroes invalid dates under some sql_modes, which would then
+    // loop forever in pm_recurring_spawn_now's catch-up advance.
+    if (!empty($r['next_run']) && !pm_is_ymd_date((string)$r['next_run'])) {
+        pm_error('Invalid next_run date (use YYYY-MM-DD)');
+    }
+    if (!empty($r['ends_on']) && !pm_is_ymd_date((string)$r['ends_on'])) {
+        pm_error('Invalid ends_on date (use YYYY-MM-DD)');
+    }
+    if (!empty($r['ends_on']) && !empty($r['next_run']) && $r['ends_on'] < $r['next_run']) {
+        pm_error('ends_on cannot be before next_run');
+    }
+}
+
+function pm_is_ymd_date(string $d): bool {
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) return false;
+    [$y, $m, $day] = array_map('intval', explode('-', $d));
+    return checkdate($m, $day, $y);
 }
 
 function pm_recurring_spawn_now(array $rule): ?int {
@@ -179,10 +197,12 @@ function pm_recurring_next_date(string $fromYmd, array $rule): string {
 function pm_recurring_save(array $input, ?int $existingId = null): int {
     $title     = trim((string)($input['title'] ?? ''));
     if ($title === '') pm_error('Title required');
+    if (mb_strlen($title) > 500) pm_error('Title is too long (max 500 characters)');
     $projectId = (int)($input['project_id'] ?? 0);
     if (!$projectId) pm_error('project_id required');
-    $proj = pm_fetch_one('SELECT id FROM projects WHERE id = ?', [$projectId]);
+    $proj = pm_fetch_one('SELECT id, archived FROM projects WHERE id = ?', [$projectId]);
     if (!$proj) pm_error('Invalid project_id');
+    if (!empty($proj['archived'])) pm_error('Cannot target an archived project', 409);
 
     $shape = [
         'project_id'       => $projectId,

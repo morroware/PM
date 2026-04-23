@@ -69,9 +69,10 @@ as needed).
 | 4.1 | Click a project in sidebar | Project filter pill applied; task count in topbar drops. |
 | 4.2 | Assignee + labels filter combined | Tasks matching all three constraints shown. Count updates. |
 | 4.3 | Clear filters button | All filters removed; full list restored. |
-| 4.4 | `Ctrl+K` / `⌘K` | Global search input focused. |
+| 4.4 | `Ctrl+K` / `⌘K` outside a modal/input | Global search input focused. |
 | 4.5 | Typing in search | Filters tasks live by title + ref. |
-| 4.6 | `Ctrl+N` / `⌘N` | Quick-add modal opens (unless a task drawer is already open). |
+| 4.6 | `Ctrl+N` / `⌘N` outside modals/inputs | Quick-add modal opens. |
+| 4.6a | `Ctrl+N`/`Ctrl+K` while a modal is open (detail drawer, quick-add, profile, settings) or while focus is inside any `<input>`/`<textarea>` | Shortcut is ignored; the keystroke reaches the focused field normally. |
 | 4.7 | `Esc` inside quick-add / profile / detail | Closes the modal cleanly, no orphan scrim. |
 | 4.8 | Reload page after selecting a view + project filter | View + project filter restored from `localStorage`. |
 

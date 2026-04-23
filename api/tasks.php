@@ -49,6 +49,20 @@ pm_error('Method not allowed', 405);
 
 // ----------- handlers -----------
 
+// Status ids must match the frontend's STATUSES list (assets/js/ui.js). Keeping
+// them as a whitelist here stops a malformed client (or a stale third-party
+// integration) from persisting gibberish that later breaks filtering/kanban.
+function pm_is_valid_status(string $s): bool {
+    return in_array($s, ['backlog','todo','in_progress','review','done'], true);
+}
+
+// Accept YYYY-MM-DD. DATE columns will silently coerce weird input, so guard.
+function pm_is_valid_date(string $d): bool {
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) return false;
+    [$y, $m, $day] = array_map('intval', explode('-', $d));
+    return checkdate($m, $day, $y);
+}
+
 function pm_task_base_shape(array $t): array {
     return [
         'id'          => (int)$t['id'],
@@ -182,13 +196,21 @@ function pm_validate_assignee_ids(array $assigneeIds): array {
 function pm_create_task(): void {
     $title = trim((string)pm_param('title', ''));
     if ($title === '') pm_error('Title required');
+    // Bound to the column width declared in install.php so the DB doesn't
+    // silently truncate, or — worse — surface a raw length-violation error.
+    if (mb_strlen($title) > 500) pm_error('Title is too long (max 500 characters)');
     $project  = pm_int_param('project');
     if (!$project) pm_error('project required');
     $status   = (string)pm_param('status', 'todo');
+    if (!pm_is_valid_status($status)) pm_error('Invalid status');
     $priority = (int)pm_param('priority', 2);
+    if ($priority < 0 || $priority > 3) pm_error('Invalid priority');
     $due      = pm_param('due');
+    if ($due !== null && $due !== '' && !pm_is_valid_date((string)$due)) pm_error('Invalid due date');
     $estimate = pm_param('estimate');
+    if ($estimate !== null && mb_strlen((string)$estimate) > 32) pm_error('Estimate is too long');
     $desc     = pm_param('description');
+    if ($desc !== null && mb_strlen((string)$desc) > 20000) pm_error('Description is too long');
     $labels   = (array)pm_param('labels', []);
     $assignees= (array)pm_param('assignees', []);
 
@@ -272,6 +294,30 @@ function pm_update_task(int $id): void {
     $prevAssignees = [];
     foreach (pm_fetch_all('SELECT user_id FROM task_assignees WHERE task_id = ?', [$id]) as $r) {
         $prevAssignees[] = (int)$r['user_id'];
+    }
+
+    // Validate per-column before touching the DB so callers get a clean 400
+    // instead of a PDOException bubbled up as a 500.
+    if (array_key_exists('title', $body)) {
+        $t = trim((string)$body['title']);
+        if ($t === '') pm_error('Title cannot be empty');
+        if (mb_strlen($t) > 500) pm_error('Title is too long (max 500 characters)');
+    }
+    if (array_key_exists('status', $body) && !pm_is_valid_status((string)$body['status'])) {
+        pm_error('Invalid status');
+    }
+    if (array_key_exists('due', $body) && $body['due'] !== null && $body['due'] !== '' && !pm_is_valid_date((string)$body['due'])) {
+        pm_error('Invalid due date');
+    }
+    if (array_key_exists('estimate', $body) && $body['estimate'] !== null && mb_strlen((string)$body['estimate']) > 32) {
+        pm_error('Estimate is too long');
+    }
+    if (array_key_exists('description', $body) && $body['description'] !== null && mb_strlen((string)$body['description']) > 20000) {
+        pm_error('Description is too long');
+    }
+    if (array_key_exists('priority', $body)) {
+        $p = (int)$body['priority'];
+        if ($p < 0 || $p > 3) pm_error('Invalid priority');
     }
 
     $fields = [];
@@ -371,6 +417,7 @@ function pm_add_subtask(int $taskId): void {
     if (!$task) pm_error('Task not found', 404);
     $text = trim((string)pm_param('text', ''));
     if ($text === '') pm_error('Text required');
+    if (mb_strlen($text) > 500) pm_error('Subtask is too long (max 500 characters)');
     $maxRow = pm_fetch_one('SELECT COALESCE(MAX(sort_order), 0) AS m FROM subtasks WHERE task_id = ?', [$taskId]);
     $next = ((int)($maxRow['m'] ?? 0)) + 1;
     pm_exec('INSERT INTO subtasks (task_id, text, done, sort_order) VALUES (?,?,0,?)',
@@ -394,6 +441,7 @@ function pm_update_subtask(int $taskId, int $subId): void {
     if (array_key_exists('text', $body)) {
         $text = trim((string)$body['text']);
         if ($text === '') pm_error('Subtask text cannot be empty');
+        if (mb_strlen($text) > 500) pm_error('Subtask is too long (max 500 characters)');
         $fields[] = 'text = ?';
         $params[] = $text;
     }
@@ -432,6 +480,10 @@ function pm_comment_shape(array $r): array {
 }
 
 function pm_list_comments(int $taskId): void {
+    // Distinguish "task exists, has no comments" (200, []) from "task gone"
+    // (404) so the drawer can show an accurate empty state vs. an error.
+    $taskExists = pm_fetch_one('SELECT id FROM tasks WHERE id = ?', [$taskId]);
+    if (!$taskExists) pm_error('Task not found', 404);
     $rows = pm_fetch_all(
         'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
          FROM comments c LEFT JOIN users u ON u.id = c.user_id
@@ -442,8 +494,16 @@ function pm_list_comments(int $taskId): void {
 }
 
 function pm_add_comment(int $taskId): void {
+    // Confirm the task exists up-front; otherwise the INSERT will fail on the
+    // FK with a schema-leaking 500 instead of a clean 404.
+    $taskExists = pm_fetch_one('SELECT id FROM tasks WHERE id = ?', [$taskId]);
+    if (!$taskExists) pm_error('Task not found', 404);
     $body = trim((string)pm_param('body', ''));
     if ($body === '') pm_error('Empty comment');
+    // Bound the comment at a comfortable-but-sane size. The DB column is TEXT
+    // (~65KB), but letting users paste multi-MB content degrades the rest of
+    // the UI (and Slack post-truncation downstream) for everyone else.
+    if (mb_strlen($body) > 5000) pm_error('Comment is too long (max 5000 characters)');
     pm_exec('INSERT INTO comments (task_id, user_id, body) VALUES (?,?,?)',
         [$taskId, pm_current_user_id(), $body]);
     pm_log_activity(pm_current_user_id(), $taskId, 'commented', mb_substr($body, 0, 200));
@@ -471,6 +531,7 @@ function pm_update_comment(int $taskId, int $commentId): void {
     if (!$isOwner && empty($me['is_admin'])) pm_error('Not allowed', 403);
     $body = trim((string)pm_param('body', ''));
     if ($body === '') pm_error('Empty comment');
+    if (mb_strlen($body) > 5000) pm_error('Comment is too long (max 5000 characters)');
     pm_exec('UPDATE comments SET body = ?, updated_at = NOW() WHERE id = ? AND task_id = ?', [$body, $commentId, $taskId]);
     $r = pm_fetch_one(
         'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
@@ -527,6 +588,38 @@ function pm_bulk_update_tasks(): void {
     if (!$ids) pm_error('task_ids required');
     $patch = is_array($body['patch'] ?? null) ? $body['patch'] : [];
     if (!$patch) pm_error('patch required');
+    // Reject bad patches once, before the loop — otherwise we'd partially
+    // mutate the first N tasks and then bail on the N+1th with a mismatched
+    // 400 that makes the rollback picture confusing for the caller.
+    if (array_key_exists('title', $patch)) {
+        $t = trim((string)$patch['title']);
+        if ($t === '' || mb_strlen($t) > 500) pm_error('Invalid title');
+    }
+    if (array_key_exists('status', $patch) && !pm_is_valid_status((string)$patch['status'])) {
+        pm_error('Invalid status');
+    }
+    if (array_key_exists('priority', $patch)) {
+        $p = (int)$patch['priority'];
+        if ($p < 0 || $p > 3) pm_error('Invalid priority');
+    }
+    if (array_key_exists('due', $patch) && $patch['due'] !== null && $patch['due'] !== '' && !pm_is_valid_date((string)$patch['due'])) {
+        pm_error('Invalid due date');
+    }
+    if (array_key_exists('estimate', $patch) && $patch['estimate'] !== null && mb_strlen((string)$patch['estimate']) > 32) {
+        pm_error('Estimate is too long');
+    }
+    if (array_key_exists('project', $patch)) {
+        $np = (int)$patch['project'];
+        $proj = pm_fetch_one('SELECT id, archived FROM projects WHERE id = ?', [$np]);
+        if (!$proj) pm_error('Invalid project', 409);
+        if (!empty($proj['archived'])) pm_error('Cannot move tasks into an archived project', 409);
+    }
+    // Pre-validate the assignees list once so a bogus id doesn't get caught
+    // mid-loop after we've already written to N tasks.
+    $preValidatedAssignees = null;
+    if (array_key_exists('assignees', $patch) && is_array($patch['assignees'])) {
+        $preValidatedAssignees = pm_validate_assignee_ids($patch['assignees']);
+    }
     $updated = 0;
     foreach ($ids as $id) {
         $task = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$id]);
@@ -557,9 +650,9 @@ function pm_bulk_update_tasks(): void {
             pm_exec('DELETE FROM task_labels WHERE task_id = ?', [$id]);
             foreach ($valid as $lid) pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$id, (int)$lid]);
         }
-        if (array_key_exists('assignees', $patch) && is_array($patch['assignees'])) {
+        if ($preValidatedAssignees !== null) {
             pm_exec('DELETE FROM task_assignees WHERE task_id = ?', [$id]);
-            foreach ($patch['assignees'] as $uid) {
+            foreach ($preValidatedAssignees as $uid) {
                 pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$id, (int)$uid]);
             }
         }

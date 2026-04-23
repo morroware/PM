@@ -48,10 +48,23 @@ if ($method === 'GET' && $id === null) {
 
 if ($method === 'POST' && $id === null) {
     [$name, $view, $filters, $isDefault] = pm_saved_view_payload(pm_body());
-    if ($isDefault) pm_exec('UPDATE saved_views SET is_default = 0 WHERE user_id = ?', [$uid]);
-    pm_exec('INSERT INTO saved_views (user_id, name, view_key, filters_json, is_default) VALUES (?,?,?,?,?)',
-        [$uid, $name, $view, $filters, $isDefault]);
-    $row = pm_fetch_one('SELECT * FROM saved_views WHERE id = ?', [pm_last_id()]);
+    // Wrap the "clear other defaults, then insert" pair in a transaction.
+    // Without this, a crash between the UPDATE and the INSERT would leave the
+    // user with no default view at all.
+    $pdo = pm_db();
+    $pdo->beginTransaction();
+    try {
+        if ($isDefault) pm_exec('UPDATE saved_views SET is_default = 0 WHERE user_id = ?', [$uid]);
+        pm_exec('INSERT INTO saved_views (user_id, name, view_key, filters_json, is_default) VALUES (?,?,?,?,?)',
+            [$uid, $name, $view, $filters, $isDefault]);
+        $newId = pm_last_id();
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        error_log('saved_views POST failed: ' . $e->getMessage());
+        pm_error('Saved view could not be created', 500);
+    }
+    $row = pm_fetch_one('SELECT * FROM saved_views WHERE id = ?', [$newId]);
     if (!$row) pm_error('Saved view could not be created', 500);
     pm_json(['saved_view' => pm_saved_view_shape($row)]);
 }
@@ -69,9 +82,20 @@ if ($id !== null) {
             'is_default' => array_key_exists('is_default', $body) ? !empty($body['is_default']) : !empty($row['is_default']),
         ];
         [$name, $view, $filters, $isDefault] = pm_saved_view_payload($merged);
-        if ($isDefault) pm_exec('UPDATE saved_views SET is_default = 0 WHERE user_id = ?', [$uid]);
-        pm_exec('UPDATE saved_views SET name=?, view_key=?, filters_json=?, is_default=? WHERE id=? AND user_id=?',
-            [$name, $view, $filters, $isDefault, $id, $uid]);
+        // Same transactional guardrail as POST: either both writes land, or
+        // neither does — so a failure can't leave the user with zero defaults.
+        $pdo = pm_db();
+        $pdo->beginTransaction();
+        try {
+            if ($isDefault) pm_exec('UPDATE saved_views SET is_default = 0 WHERE user_id = ?', [$uid]);
+            pm_exec('UPDATE saved_views SET name=?, view_key=?, filters_json=?, is_default=? WHERE id=? AND user_id=?',
+                [$name, $view, $filters, $isDefault, $id, $uid]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            error_log('saved_views PATCH failed: ' . $e->getMessage());
+            pm_error('Saved view could not be updated', 500);
+        }
         $row = pm_fetch_one('SELECT * FROM saved_views WHERE id = ? AND user_id = ?', [$id, $uid]);
         pm_json(['saved_view' => pm_saved_view_shape($row)]);
     }
