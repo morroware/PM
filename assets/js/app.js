@@ -861,7 +861,7 @@
         weekday: '',
         month_day: '',
         month_of_year: '',
-        next_run: new Date().toISOString().slice(0, 10),
+        next_run: ymd(today()),
         ends_on: '',
         occurrences_left: '',
         paused: false,
@@ -915,7 +915,7 @@
       model.recurringForm.weekday = r?.weekday == null ? '' : String(r.weekday);
       model.recurringForm.month_day = r?.month_day == null ? '' : String(r.month_day);
       model.recurringForm.month_of_year = r?.month_of_year == null ? '' : String(r.month_of_year);
-      model.recurringForm.next_run = r?.next_run ?? new Date().toISOString().slice(0, 10);
+      model.recurringForm.next_run = r?.next_run ?? ymd(today());
       model.recurringForm.ends_on = r?.ends_on ?? '';
       model.recurringForm.occurrences_left = r?.occurrences_left == null ? '' : String(r.occurrences_left);
       model.recurringForm.paused = !!r?.paused;
@@ -1576,12 +1576,30 @@
   }
 
   // ----- shortcuts -----
+  // Don't hijack typing inside any text field, and don't steal focus from
+  // the user while they're mid-edit inside a modal.
+  function shortcutBlocked() {
+    if (state.quickAddOpen || state.settingsOpen || state.profileOpen || state.openTaskId) return true;
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      // Ctrl+K is "focus search" — allow it anywhere outside text fields,
+      // since the user is explicitly asking to jump to search.
+      if (state.quickAddOpen || state.settingsOpen || state.profileOpen) return;
+      const el = document.activeElement;
+      const tag = (el?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
       e.preventDefault();
       document.getElementById('global-search')?.focus();
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !e.shiftKey && !state.openTaskId && !state.quickAddOpen) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !e.shiftKey) {
+      if (shortcutBlocked()) return;
       e.preventDefault();
       state.quickAddStatus = 'todo';
       state.quickAddDefaults = null;
