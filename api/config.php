@@ -21,4 +21,10 @@ return [
     // App
     'app_name'    => 'Castle Tech Tasks',
     'project_key' => 'CTT',
+
+    // Attachments
+    // Keep this outside any publicly-browsable path when possible.
+    // Default resolves to <repo>/storage/attachments.
+    // 'attachments_dir' => __DIR__ . '/../storage/attachments',
+    'attachments_max_bytes' => 10 * 1024 * 1024, // 10 MB per file
 ];

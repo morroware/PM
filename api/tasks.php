@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/slack_client.php';
+require_once __DIR__ . '/attachments_lib.php';
 pm_boot();
 pm_require_auth();
 
@@ -80,6 +81,7 @@ function pm_task_base_shape(array $t): array {
         'assignees'   => [],
         'subtasks'    => [],
         'comments'    => 0,
+        'attachments' => 0,
         'created_at'  => $t['created_at'],
         'updated_at'  => $t['updated_at'],
     ];
@@ -100,6 +102,8 @@ function pm_task_row_to_shape(array $t): array {
         'done' => (bool)$r['done'],
     ], $subs);
     $shape['comments']  = (int)$cmtRow['c'];
+    $attRow = pm_fetch_one('SELECT COUNT(*) AS c FROM task_attachments WHERE task_id = ?', [$t['id']]);
+    $shape['attachments'] = (int)($attRow['c'] ?? 0);
     return $shape;
 }
 
@@ -115,6 +119,7 @@ function pm_list_tasks(): void {
     $assigneesByTask = [];
     $subsByTask      = [];
     $commentsByTask  = [];
+    $attachmentsByTask = [];
 
     foreach (pm_fetch_all("SELECT task_id, label_id FROM task_labels WHERE task_id IN ($ph)", $ids) as $r) {
         $labelsByTask[(int)$r['task_id']][] = (int)$r['label_id'];
@@ -136,6 +141,9 @@ function pm_list_tasks(): void {
     foreach (pm_fetch_all("SELECT task_id, COUNT(*) AS c FROM comments WHERE task_id IN ($ph) GROUP BY task_id", $ids) as $r) {
         $commentsByTask[(int)$r['task_id']] = (int)$r['c'];
     }
+    foreach (pm_fetch_all("SELECT task_id, COUNT(*) AS c FROM task_attachments WHERE task_id IN ($ph) GROUP BY task_id", $ids) as $r) {
+        $attachmentsByTask[(int)$r['task_id']] = (int)$r['c'];
+    }
 
     $out = [];
     foreach ($rows as $t) {
@@ -145,6 +153,7 @@ function pm_list_tasks(): void {
         $shape['assignees'] = $assigneesByTask[$id] ?? [];
         $shape['subtasks']  = $subsByTask[$id]      ?? [];
         $shape['comments']  = $commentsByTask[$id]  ?? 0;
+        $shape['attachments'] = $attachmentsByTask[$id] ?? 0;
         $out[] = $shape;
     }
     pm_json(['tasks' => $out]);
@@ -401,10 +410,12 @@ function pm_update_task(int $id): void {
 function pm_delete_task(int $id): void {
     $t = pm_fetch_one('SELECT id, title FROM tasks WHERE id = ?', [$id]);
     if (!$t) pm_error('Not found', 404);
+    $atts = pm_fetch_all('SELECT stored_name FROM task_attachments WHERE task_id = ?', [$id]);
     // Log before the delete so activity.task_id can still FK-resolve the
     // title in the listing, and so the entry survives the cascade.
     pm_log_activity(pm_current_user_id(), null, 'deleted', $t['title'] ?? '');
     pm_exec('DELETE FROM tasks WHERE id = ?', [$id]);
+    foreach ($atts as $a) pm_attachment_delete_file((string)($a['stored_name'] ?? ''));
     pm_json(['ok' => true]);
 }
 
