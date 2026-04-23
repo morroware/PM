@@ -89,6 +89,7 @@ function pm_is_ymd_date(string $d): bool {
 
 function pm_recurring_spawn_now(array $rule): ?int {
     if (!empty($rule['paused'])) return null;
+    $ruleId = (int)($rule['id'] ?? 0);
     $scheduleFor = $rule['next_run'] ?: date('Y-m-d');
     $today = date('Y-m-d');
     $guard = 0;
@@ -97,8 +98,14 @@ function pm_recurring_spawn_now(array $rule): ?int {
         if ($next <= $scheduleFor) break;
         $scheduleFor = $next;
     }
-    if (!empty($rule['ends_on']) && $scheduleFor > $rule['ends_on']) return null;
-    if ($rule['occurrences_left'] !== null && (int)$rule['occurrences_left'] <= 0) return null;
+    if (!empty($rule['ends_on']) && $scheduleFor > $rule['ends_on']) {
+        if ($ruleId > 0) pm_exec('UPDATE recurring_rules SET paused = 1 WHERE id = ?', [$ruleId]);
+        return null;
+    }
+    if ($rule['occurrences_left'] !== null && (int)$rule['occurrences_left'] <= 0) {
+        if ($ruleId > 0) pm_exec('UPDATE recurring_rules SET paused = 1 WHERE id = ?', [$ruleId]);
+        return null;
+    }
 
     $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$rule['project_id']]);
     if (!$proj) return null;
@@ -143,7 +150,7 @@ function pm_recurring_spawn_now(array $rule): ?int {
     $occLeft = $rule['occurrences_left'] === null ? null : max(0, (int)$rule['occurrences_left'] - 1);
     pm_exec(
         'UPDATE recurring_rules SET next_run = ?, last_task_id = ?, occurrences_left = ? WHERE id = ?',
-        [$nextRun, $tid, $occLeft, (int)$rule['id']]
+        [$nextRun, $tid, $occLeft, $ruleId]
     );
     pm_exec('INSERT INTO activity (user_id, task_id, action, detail) VALUES (?,?,?,?)',
         [pm_current_user_id() ?: 0, $tid, 'recurring_spawn', 'Generated from recurring rule']);

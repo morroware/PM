@@ -13,6 +13,7 @@ as needed).
 
 ## 0. Pre-flight
 
+- [ ] Run `./scripts/beta-smoke.sh` and confirm `beta-smoke: OK`.
 - [ ] `api/config.php` has real DB credentials on target host.
 - [ ] `/install.php` is deleted from the deploy target (or re-added
   just-in-time for a planned schema re-run and deleted again).

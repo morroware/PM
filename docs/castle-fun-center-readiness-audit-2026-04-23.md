@@ -2,44 +2,57 @@
 
 ## Scope
 
-This audit is based on static code review and local lint checks only. Full browser and DB-backed end-to-end validation was **not** possible in this environment.
+This audit was run on April 23, 2026 by static review + executable lint checks
+in this container. Browser-integrated and DB-backed end-to-end checks are still
+required before production beta cutover.
 
 ## What was validated
 
-- PHP syntax checks across all backend files.
-- JavaScript syntax checks across all frontend modules.
-- Product claims compared to current implementation and regression checklist.
+- PHP syntax check for all API/install PHP files.
+- JavaScript syntax check for all shipped frontend modules.
+- Feature-surface review across auth, task lifecycle, views, admin settings,
+  recurring automation, and Slack integration code paths.
+- Regression checklist cross-check against current implementation.
 
-## High-impact issues that block “completely useful” status
+## Findings summary
 
-1. **No automated end-to-end verification exists yet**
-   - The project currently relies on manual QA checklists rather than executable automated tests.
-   - This means there is no repeatable, machine-verified proof that all features are working before release.
+### ✅ Confirmed implemented
 
-2. **Slack and recurring workflows are not fully available in the in-app admin UI**
-   - The README explicitly states both are still API-driven.
-   - The current `renderSettings()` modal in the app exposes only project and label administration, so non-API operators cannot fully manage these functions from the product UI.
+1. **Admin Settings includes Projects, Labels, Slack, and Recurring UI panels**
+   - The UI surface now supports end-user management for these admin features.
+2. **Recurring rule creation supports initial task bootstrap**
+   - `POST /api/recurring.php` creates the rule and (by default) spawns an
+     initial task instance.
 
-3. **Recurring rules do not create an initial task when a rule is created**
-   - Rule creation stores rule metadata only.
-   - Task generation is triggered when a recurring-linked task is marked done.
-   - This creates a bootstrap gap for new recurring rules: there is no first generated task unless another process creates/links one.
+### 🛠️ Bug fixed in this audit
 
-4. **Release checklist itself says critical admin flows are API-only “until settings UI lands”**
-   - This is a direct sign that the product is not yet complete from an operator usability standpoint.
+1. **Recurring rules could remain "active" after terminal conditions in
+   create-time spawn path**
+   - In `api/recurring.php`, when `pm_recurring_spawn_now()` encountered
+     `ends_on` passed or `occurrences_left <= 0`, it returned without setting
+     `paused=1`.
+   - This left rule state inconsistent with runtime spawn behavior in
+     `api/tasks.php`, which does pause exhausted/expired rules.
+   - **Fix applied:** create-time spawn path now marks the rule paused before
+     returning on terminal conditions.
 
-## Risk summary for the Castle Fun Center tech team
+## Remaining beta-readiness risks
 
-- The product is close, but not yet “ALL features working as expected” in a fully self-serve UI sense.
-- For a team expecting complete PM software behavior, the largest practical gaps are:
-  - lack of full UI coverage for advanced admin features,
-  - recurring workflow bootstrap behavior,
-  - lack of automated regression execution.
+1. **Automated smoke is now available, but still not full E2E**
+   - `./scripts/beta-smoke.sh` provides executable lint + settings-surface
+     checks.
+   - A real browser+DB integration suite is still recommended before GA.
+2. **Environment limitation for this audit run**
+   - This container does not provide a configured app server + MySQL instance,
+     so only static/runtime syntax and code-path inspection were executable here.
 
-## Recommended next steps (priority order)
+## Recommendation for Castle Tech beta gate
 
-1. Add **UI panels** for Slack and recurring rule management inside Admin Settings.
-2. Fix recurring bootstrap by creating the first task at rule creation time (or provide explicit “Generate now” action).
-3. Add a minimal automated smoke suite (API + UI) to run before deployment.
-4. Convert key rows from `docs/regression-checklist.md` into scriptable checks so releases have objective pass/fail gates.
+Proceed to a controlled beta **after** running the checklist in
+`docs/regression-checklist.md` against a real staging deployment with seeded
+data, with special attention to:
 
+1. auth/session persistence and role boundaries,
+2. task edits across list/kanban/calendar/detail parity,
+3. recurring + Slack side effects from task completion events,
+4. admin destructive flows (archive/delete/merge with guards).
