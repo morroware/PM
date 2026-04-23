@@ -77,8 +77,8 @@ as needed).
 
 ## 5. Projects, labels, recurring, Slack (admin-only surfaces)
 
-These currently require an admin session; once the Settings UI lands in
-Phase 1, verify they are reachable without resorting to curl.
+These require an admin session. Most flows are now reachable from Admin
+Settings UI; API/curl checks remain useful as backend validation.
 
 | # | Action | Expected |
 |---|---|---|

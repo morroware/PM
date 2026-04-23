@@ -836,6 +836,36 @@
         color: 'slate',
         project_id: '',
       },
+      slackLoading: true,
+      recurringLoading: true,
+      slackErr: '',
+      recurringErr: '',
+      slack: {
+        enabled: false,
+        has_token: false,
+        token_preview: '',
+        bot_token: '',
+        default_channel: '',
+        events: {},
+        templates: {},
+        last_ok_at: null,
+        last_error: null,
+      },
+      recurringRules: [],
+      recurringForm: {
+        id: null,
+        project_id: '',
+        title: '',
+        cadence: 'weekly',
+        interval_n: 1,
+        weekday: '',
+        month_day: '',
+        month_of_year: '',
+        next_run: new Date().toISOString().slice(0, 10),
+        ends_on: '',
+        occurrences_left: '',
+        paused: false,
+      },
     };
 
     const frag = document.createDocumentFragment();
@@ -875,6 +905,21 @@
       model.labelForm.color = l?.color ?? 'slate';
       model.labelForm.project_id = l?.project_id == null ? '' : String(l.project_id);
     }
+    function resetRecurringForm(r = null) {
+      model.recurringErr = '';
+      model.recurringForm.id = r?.id ?? null;
+      model.recurringForm.project_id = r?.project_id ? String(r.project_id) : '';
+      model.recurringForm.title = r?.title ?? '';
+      model.recurringForm.cadence = r?.cadence ?? 'weekly';
+      model.recurringForm.interval_n = Number(r?.interval_n ?? 1) || 1;
+      model.recurringForm.weekday = r?.weekday == null ? '' : String(r.weekday);
+      model.recurringForm.month_day = r?.month_day == null ? '' : String(r.month_day);
+      model.recurringForm.month_of_year = r?.month_of_year == null ? '' : String(r.month_of_year);
+      model.recurringForm.next_run = r?.next_run ?? new Date().toISOString().slice(0, 10);
+      model.recurringForm.ends_on = r?.ends_on ?? '';
+      model.recurringForm.occurrences_left = r?.occurrences_left == null ? '' : String(r.occurrences_left);
+      model.recurringForm.paused = !!r?.paused;
+    }
 
     async function refreshProjects() {
       model.loading = true;
@@ -908,6 +953,140 @@
         model.labelsLoading = false;
       }
       redraw();
+    }
+    async function refreshSlack() {
+      model.slackLoading = true;
+      redraw();
+      try {
+        const r = await API.getSlack();
+        model.slack = {
+          ...model.slack,
+          ...(r.slack || {}),
+          bot_token: '',
+          events: { ...(r.slack?.events || {}) },
+          templates: { ...(r.slack?.templates || {}) },
+        };
+      } catch (e) {
+        model.slackErr = e.message || 'Failed to load Slack settings';
+      } finally {
+        model.slackLoading = false;
+      }
+      redraw();
+    }
+    async function saveSlack() {
+      model.slackErr = '';
+      model.saving = true;
+      redraw();
+      const payload = {
+        enabled: !!model.slack.enabled,
+        default_channel: (model.slack.default_channel || '').trim(),
+        events: model.slack.events || {},
+        templates: model.slack.templates || {},
+      };
+      if ((model.slack.bot_token || '').trim()) payload.bot_token = model.slack.bot_token.trim();
+      try {
+        const r = await API.updateSlack(payload);
+        model.slack = {
+          ...model.slack,
+          ...(r.slack || {}),
+          bot_token: '',
+          events: { ...(r.slack?.events || {}) },
+          templates: { ...(r.slack?.templates || {}) },
+        };
+        toast('Slack settings saved', 'success');
+      } catch (e) {
+        model.slackErr = e.message || 'Failed to save Slack settings';
+      } finally {
+        model.saving = false;
+        redraw();
+      }
+    }
+    async function sendSlackTest() {
+      const channel = (model.slack.default_channel || '').trim();
+      if (!channel) {
+        model.slackErr = 'Set a default channel before sending a test';
+        redraw();
+        return;
+      }
+      model.saving = true;
+      redraw();
+      try {
+        await API.testSlack(channel);
+        toast('Slack test sent', 'success');
+        await refreshSlack();
+      } catch (e) {
+        model.slackErr = e.message || 'Slack test failed';
+      } finally {
+        model.saving = false;
+        redraw();
+      }
+    }
+    async function refreshRecurringAdmin() {
+      model.recurringLoading = true;
+      redraw();
+      try {
+        const r = await API.listRecurring();
+        model.recurringRules = r.rules || [];
+      } catch (e) {
+        model.recurringErr = e.message || 'Failed to load recurring rules';
+      } finally {
+        model.recurringLoading = false;
+      }
+      redraw();
+    }
+    async function saveRecurringRule() {
+      const f = model.recurringForm;
+      const payload = {
+        project_id: Number(f.project_id),
+        title: (f.title || '').trim(),
+        cadence: f.cadence,
+        interval_n: Math.max(1, Number(f.interval_n) || 1),
+        next_run: f.next_run,
+        ends_on: f.ends_on || null,
+        occurrences_left: f.occurrences_left === '' ? null : Math.max(0, Number(f.occurrences_left) || 0),
+        paused: !!f.paused,
+      };
+      if (!payload.project_id) { model.recurringErr = 'Project is required'; redraw(); return; }
+      if (!payload.title) { model.recurringErr = 'Title is required'; redraw(); return; }
+      if (!payload.next_run) { model.recurringErr = 'Next run date is required'; redraw(); return; }
+      if (f.cadence === 'weekly' && f.weekday !== '') payload.weekday = Number(f.weekday);
+      if ((f.cadence === 'monthly' || f.cadence === 'yearly') && f.month_day !== '') payload.month_day = Number(f.month_day);
+      if (f.cadence === 'yearly' && f.month_of_year !== '') payload.month_of_year = Number(f.month_of_year);
+      model.saving = true;
+      model.recurringErr = '';
+      redraw();
+      try {
+        if (f.id) await API.updateRecurring(f.id, payload);
+        else await API.createRecurring(payload);
+        resetRecurringForm();
+        await refreshRecurringAdmin();
+        await refreshTasks();
+        toast(f.id ? 'Recurring rule updated' : 'Recurring rule created', 'success');
+      } catch (e) {
+        model.recurringErr = e.message || 'Failed to save recurring rule';
+      } finally {
+        model.saving = false;
+        redraw();
+      }
+    }
+    async function deleteRecurringRule(rule) {
+      if (!confirm(`Delete recurring rule "${rule.title}"?`)) return;
+      try {
+        await API.deleteRecurring(rule.id);
+        await refreshRecurringAdmin();
+        toast('Recurring rule deleted', 'success');
+      } catch (e) {
+        toast(e.message || 'Delete failed', 'error');
+      }
+    }
+    async function toggleRecurringPause(rule) {
+      try {
+        await API.updateRecurring(rule.id, { paused: !rule.paused });
+        await refreshRecurringAdmin();
+        toast(rule.paused ? 'Rule resumed' : 'Rule paused', 'success');
+      } catch (e) {
+        toast(e.message || 'Update failed', 'error');
+      }
     }
 
     async function saveProject() {
@@ -1217,10 +1396,166 @@
         if (!model.labels.length) labelList.appendChild(h('div', { class: 'empty' }, 'No labels found.'));
         body.appendChild(labelList);
       }
+
+      body.appendChild(h('div', { class: 'settings-section-head', style: { marginTop: '20px' } },
+        h('div', null,
+          h('h3', null, 'Slack integration'),
+          h('div', { class: 'sub' }, 'Manage bot token, default channel, event toggles, templates, and test delivery.'),
+        ),
+      ));
+      if (model.slackLoading) body.appendChild(h('div', { class: 'empty' }, 'Loading Slack settings…'));
+      else {
+        const slackForm = h('div', { class: 'settings-form' });
+        slackForm.appendChild(h('div', { class: 'full check-grid' },
+          h('label', { class: 'check-row' },
+            h('input', {
+              type: 'checkbox',
+              checked: !!model.slack.enabled,
+              onChange: e => { model.slack.enabled = !!e.target.checked; },
+            }),
+            'Enable Slack delivery',
+          ),
+        ));
+        slackForm.appendChild(h('div', null,
+          h('label', null, 'Default channel'),
+          h('input', { type: 'text', placeholder: '#team-alerts', value: model.slack.default_channel || '', onInput: e => { model.slack.default_channel = e.target.value; } }),
+        ));
+        slackForm.appendChild(h('div', null,
+          h('label', null, 'Bot token'),
+          h('input', { type: 'password', placeholder: model.slack.token_preview || 'xoxb-…', value: model.slack.bot_token || '', onInput: e => { model.slack.bot_token = e.target.value; } }),
+        ));
+        slackForm.appendChild(h('div', { class: 'full hint' },
+          model.slack.has_token ? `Token configured (${model.slack.token_preview || 'hidden'}). Leave blank to keep unchanged.` : 'No token configured yet.',
+        ));
+        slackForm.appendChild(h('div', { class: 'full check-grid' }, ['task_created','task_completed','task_assigned','comment_added','project_archived','mention_added'].map(key =>
+          h('label', { class: 'check-row' },
+            h('input', {
+              type: 'checkbox',
+              checked: !!model.slack.events?.[key],
+              onChange: e => { model.slack.events[key] = !!e.target.checked; },
+            }),
+            key.replaceAll('_', ' '),
+          ))));
+        slackForm.appendChild(h('div', { class: 'full' },
+          h('label', null, 'Template override (task_completed)'),
+          h('textarea', { value: model.slack.templates?.task_completed || '', placeholder: '{actor} marked {ref} done', onInput: e => {
+            model.slack.templates.task_completed = e.target.value;
+          } }),
+        ));
+        slackForm.appendChild(h('div', { class: 'form-foot' },
+          model.slackErr ? h('span', { class: 'err' }, model.slackErr) : null,
+          h('button', { class: 'btn btn-ghost', disabled: model.saving, onClick: sendSlackTest }, 'Send test'),
+          h('button', { class: 'btn btn-primary', disabled: model.saving, onClick: saveSlack }, 'Save Slack settings'),
+        ));
+        body.appendChild(slackForm);
+        body.appendChild(h('div', { class: 'settings-status' + (model.slack.last_error ? ' err' : '') },
+          h('span', null, model.slack.last_ok_at ? `Last success: ${model.slack.last_ok_at}` : 'No successful delivery yet'),
+          model.slack.last_error ? h('span', null, `Last error: ${model.slack.last_error}`) : null,
+        ));
+      }
+
+      body.appendChild(h('div', { class: 'settings-section-head', style: { marginTop: '20px' } },
+        h('div', null,
+          h('h3', null, 'Recurring rules'),
+          h('div', { class: 'sub' }, 'Create and manage recurring task templates from the UI. New rules generate an initial task automatically.'),
+        ),
+      ));
+      const recurringForm = h('div', { class: 'settings-form' });
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Project'),
+        h('select', { value: model.recurringForm.project_id, onChange: e => { model.recurringForm.project_id = e.target.value; } },
+          h('option', { value: '' }, 'Select project'),
+          state.projects.map(p => h('option', { value: String(p.id) }, p.name)),
+        ),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Title'),
+        h('input', { type: 'text', value: model.recurringForm.title, onInput: e => { model.recurringForm.title = e.target.value; } }),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Cadence'),
+        h('select', { value: model.recurringForm.cadence, onChange: e => { model.recurringForm.cadence = e.target.value; redraw(); } },
+          ['daily','weekly','monthly','yearly'].map(c => h('option', { value: c }, c)),
+        ),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Every N'),
+        h('input', { type: 'number', min: 1, value: model.recurringForm.interval_n, onInput: e => { model.recurringForm.interval_n = e.target.value; } }),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Next run'),
+        h('input', { type: 'date', value: model.recurringForm.next_run, onInput: e => { model.recurringForm.next_run = e.target.value; } }),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Ends on'),
+        h('input', { type: 'date', value: model.recurringForm.ends_on, onInput: e => { model.recurringForm.ends_on = e.target.value; } }),
+      ));
+      recurringForm.appendChild(h('div', null,
+        h('label', null, 'Occurrences left'),
+        h('input', { type: 'number', min: 0, value: model.recurringForm.occurrences_left, placeholder: 'Unlimited', onInput: e => { model.recurringForm.occurrences_left = e.target.value; } }),
+      ));
+      if (model.recurringForm.cadence === 'weekly') {
+        recurringForm.appendChild(h('div', null,
+          h('label', null, 'Weekday (0-6)'),
+          h('input', { type: 'number', min: 0, max: 6, value: model.recurringForm.weekday, onInput: e => { model.recurringForm.weekday = e.target.value; } }),
+        ));
+      }
+      if (model.recurringForm.cadence === 'monthly' || model.recurringForm.cadence === 'yearly') {
+        recurringForm.appendChild(h('div', null,
+          h('label', null, 'Day of month'),
+          h('input', { type: 'number', min: 1, max: 31, value: model.recurringForm.month_day, onInput: e => { model.recurringForm.month_day = e.target.value; } }),
+        ));
+      }
+      if (model.recurringForm.cadence === 'yearly') {
+        recurringForm.appendChild(h('div', null,
+          h('label', null, 'Month of year'),
+          h('input', { type: 'number', min: 1, max: 12, value: model.recurringForm.month_of_year, onInput: e => { model.recurringForm.month_of_year = e.target.value; } }),
+        ));
+      }
+      recurringForm.appendChild(h('div', { class: 'full check-grid' },
+        h('label', { class: 'check-row' },
+          h('input', { type: 'checkbox', checked: !!model.recurringForm.paused, onChange: e => { model.recurringForm.paused = !!e.target.checked; } }),
+          'Paused',
+        ),
+      ));
+      recurringForm.appendChild(h('div', { class: 'form-foot' },
+        model.recurringErr ? h('span', { class: 'err' }, model.recurringErr) : null,
+        model.recurringForm.id ? h('button', { class: 'btn btn-ghost', onClick: () => { resetRecurringForm(); redraw(); } }, 'Cancel edit') : null,
+        h('button', { class: 'btn btn-primary', disabled: model.saving, onClick: saveRecurringRule }, model.recurringForm.id ? 'Save rule' : 'Create rule'),
+      ));
+      body.appendChild(recurringForm);
+
+      if (model.recurringLoading) body.appendChild(h('div', { class: 'empty' }, 'Loading recurring rules…'));
+      else {
+        const recurringList = h('div', { class: 'settings-list' });
+        for (const r of model.recurringRules) {
+          recurringList.appendChild(h('div', { class: 'settings-row' + (r.paused ? ' archived' : '') },
+            h('div', { class: 'row-main' },
+              h('div', { class: 'row-title' },
+                r.title,
+                r.paused ? h('span', { class: 'pill muted' }, 'Paused') : null,
+              ),
+              h('div', { class: 'row-meta' },
+                h('span', null, `${projectById(r.project_id)?.name || 'Unknown project'} • ${r.cadence} every ${r.interval_n}`),
+                h('span', null, `Next: ${r.next_run}`),
+              ),
+            ),
+            h('div', { class: 'row-actions' },
+              h('button', { class: 'btn btn-ghost', onClick: () => { resetRecurringForm(r); redraw(); } }, 'Edit'),
+              h('button', { class: 'btn btn-ghost', onClick: () => toggleRecurringPause(r) }, r.paused ? 'Resume' : 'Pause'),
+              h('button', { class: 'btn btn-ghost', onClick: () => deleteRecurringRule(r) }, 'Delete'),
+            ),
+          ));
+        }
+        if (!model.recurringRules.length) recurringList.appendChild(h('div', { class: 'empty' }, 'No recurring rules yet.'));
+        body.appendChild(recurringList);
+      }
     }
 
     refreshProjects();
     refreshLabelsAdmin();
+    refreshSlack();
+    refreshRecurringAdmin();
     redraw();
     return frag;
   }

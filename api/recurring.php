@@ -69,6 +69,69 @@ function pm_validate_cadence_fields(array &$r): void {
     }
 }
 
+function pm_recurring_spawn_now(array $rule): ?int {
+    if (!empty($rule['paused'])) return null;
+    $scheduleFor = $rule['next_run'] ?: date('Y-m-d');
+    $today = date('Y-m-d');
+    $guard = 0;
+    while ($scheduleFor < $today && $guard++ < 3650) {
+        $next = pm_recurring_next_date($scheduleFor, $rule);
+        if ($next <= $scheduleFor) break;
+        $scheduleFor = $next;
+    }
+    if (!empty($rule['ends_on']) && $scheduleFor > $rule['ends_on']) return null;
+    if ($rule['occurrences_left'] !== null && (int)$rule['occurrences_left'] <= 0) return null;
+
+    $proj = pm_fetch_one('SELECT * FROM projects WHERE id = ?', [(int)$rule['project_id']]);
+    if (!$proj) return null;
+    $prefix = $proj['key_prefix'] ?: pm_config()['project_key'];
+
+    $tid = null;
+    $attempts = 0;
+    while (true) {
+        $maxRow = pm_fetch_one(
+            "SELECT MAX(CAST(SUBSTRING_INDEX(ref, '-', -1) AS UNSIGNED)) AS m FROM tasks WHERE ref LIKE ?",
+            [$prefix . '-%']
+        );
+        $nextRef = ((int)($maxRow['m'] ?? 0)) + 1;
+        if ($nextRef < 100) $nextRef = 100;
+        $ref = $prefix . '-' . $nextRef;
+        try {
+            pm_exec(
+                'INSERT INTO tasks (ref, project_id, status, title, description, priority, due, estimate, recurring_rule_id, created_by)
+                 VALUES (?,?,?,?,?,?,?,?,?,?)',
+                [
+                    $ref, (int)$rule['project_id'], 'todo',
+                    $rule['title'], $rule['description'], (int)$rule['priority'],
+                    $scheduleFor, $rule['estimate'] ?: null, (int)$rule['id'], pm_current_user_id(),
+                ]
+            );
+            $tid = pm_last_id();
+            break;
+        } catch (PDOException $e) {
+            if ($e->getCode() !== '23000' || ++$attempts >= 5) return null;
+            usleep(random_int(1000, 5000));
+        }
+    }
+
+    foreach (pm_decode_id_list($rule['assignees'] ?? null) as $uid) {
+        pm_exec('INSERT IGNORE INTO task_assignees (task_id, user_id) VALUES (?,?)', [$tid, (int)$uid]);
+    }
+    foreach (pm_decode_id_list($rule['labels'] ?? null) as $lid) {
+        pm_exec('INSERT IGNORE INTO task_labels (task_id, label_id) VALUES (?,?)', [$tid, (int)$lid]);
+    }
+
+    $nextRun = pm_recurring_next_date($scheduleFor, $rule);
+    $occLeft = $rule['occurrences_left'] === null ? null : max(0, (int)$rule['occurrences_left'] - 1);
+    pm_exec(
+        'UPDATE recurring_rules SET next_run = ?, last_task_id = ?, occurrences_left = ? WHERE id = ?',
+        [$nextRun, $tid, $occLeft, (int)$rule['id']]
+    );
+    pm_exec('INSERT INTO activity (user_id, task_id, action, detail) VALUES (?,?,?,?)',
+        [pm_current_user_id() ?: 0, $tid, 'recurring_spawn', 'Generated from recurring rule']);
+    return $tid;
+}
+
 // Advance a date one step according to the rule. If after advancing we land on
 // an invalid calendar day (e.g. "31st of Feb"), clamp to the month's last day.
 function pm_recurring_next_date(string $fromYmd, array $rule): string {
@@ -188,6 +251,11 @@ if ($method === 'POST' && $id === null) {
     pm_require_admin();
     $body = pm_body();
     $nid = pm_recurring_save($body, null);
+    $createInitial = !array_key_exists('create_initial_task', $body) || !empty($body['create_initial_task']);
+    if ($createInitial) {
+        $created = pm_fetch_one('SELECT * FROM recurring_rules WHERE id = ?', [$nid]);
+        if ($created) pm_recurring_spawn_now($created);
+    }
     $r = pm_fetch_one('SELECT * FROM recurring_rules WHERE id = ?', [$nid]);
     pm_json(['rule' => pm_recurring_shape($r)]);
 }
