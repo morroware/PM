@@ -21,6 +21,7 @@ The software is currently a full multi-view task manager with:
 - Dashboard, Kanban, List, Checklist, and Calendar views
 - Saved views and list bulk actions
 - Recurring task rules API
+- Task attachments with DB metadata + filesystem storage + upload/download/delete API
 - Slack integration API with event toggles, templates, test delivery, and delivery history fields
 
 For release validation coverage, see `docs/regression-checklist.md`.
@@ -225,7 +226,6 @@ Use `docs/regression-checklist.md` as release-gate verification for:
 
 ## Known limitations / next recommended work
 
-- No file attachments.
 - No realtime push transport (polling/reload patterns currently used).
 - No background worker process (intentional for shared-host compatibility).
 

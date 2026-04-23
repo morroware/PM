@@ -2,6 +2,7 @@
 // Comments are cached per-task-id on the window so re-renders of the drawer
 // (which happen on every state update) don't re-fetch the same comments.
 window._pmCommentsCache = window._pmCommentsCache || {};
+window._pmAttachmentsCache = window._pmAttachmentsCache || {};
 
 function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubtask, onDeleteSubtask, onDeleteTask }) {
   const scrim = h('div', { class: 'scrim light', onClick: onClose });
@@ -14,6 +15,8 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
   let tempTitle = task.title;
   let newSubtaskText = '';
   let comments = window._pmCommentsCache[task.id] || null;
+  let attachments = window._pmAttachmentsCache[task.id] || null;
+  let uploadingAttachment = false;
 
   async function loadComments() {
     try {
@@ -24,6 +27,15 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
     } catch (e) { toast('Could not load comments: ' + e.message, 'error'); }
   }
   if (comments === null) loadComments();
+  async function loadAttachments() {
+    try {
+      const r = await API.listAttachments(task.id);
+      attachments = r.attachments || [];
+      window._pmAttachmentsCache[task.id] = attachments;
+      redraw();
+    } catch (e) { toast('Could not load attachments: ' + e.message, 'error'); }
+  }
+  if (attachments === null) loadAttachments();
 
   function redraw() {
     drawer.replaceChildren();
@@ -48,6 +60,7 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
           try {
             await onDeleteTask(task.id);
             delete window._pmCommentsCache[task.id];
+            delete window._pmAttachmentsCache[task.id];
             onClose();
           } catch (e) { toast(e.message, 'error'); }
         } }, Icon('trash', 14)),
@@ -288,6 +301,83 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
     subSection.appendChild(subBox);
     body.appendChild(subSection);
 
+    // Attachments
+    const attSection = h('div', { style: { marginTop: '24px' } });
+    attSection.appendChild(h('div', {
+      style: { fontSize: '11px', color: 'var(--fg-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: '600', marginBottom: '10px' }
+    }, `Attachments · ${attachments == null ? '…' : attachments.length}`));
+
+    const attList = h('div', { style: { display: 'grid', gap: '8px' } });
+    if (attachments && attachments.length) {
+      attachments.forEach((a) => {
+        attList.appendChild(h('div', {
+          style: {
+            display: 'flex', gap: '8px', alignItems: 'center',
+            background: 'var(--bg-3)', border: '1px solid var(--line)', borderRadius: '8px', padding: '8px 10px',
+          },
+        },
+          Icon('paperclip', 13),
+          h('a', {
+            href: a.download_url,
+            style: { color: 'var(--fg-1)', fontSize: '12.5px', textDecoration: 'none', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            title: a.name,
+          }, a.name),
+          h('span', { class: 'mono', style: { fontSize: '11px', color: 'var(--fg-3)' } }, formatBytes(a.size)),
+          h('button', {
+            class: 'btn btn-ghost',
+            style: { fontSize: '11px', padding: '2px 6px' },
+            onClick: async () => {
+              if (!confirm(`Delete attachment \"${a.name}\"?`)) return;
+              try {
+                await API.deleteAttachment(a.id);
+                attachments = attachments.filter(x => x.id !== a.id);
+                window._pmAttachmentsCache[task.id] = attachments;
+                task.attachments = Math.max(0, (task.attachments || 0) - 1);
+                redraw();
+              } catch (e) { toast(e.message, 'error'); }
+            },
+          }, 'Delete'),
+        ));
+      });
+    } else if (attachments && attachments.length === 0) {
+      attList.appendChild(h('div', { style: { color: 'var(--fg-3)', fontSize: '12px' } }, 'No attachments yet.'));
+    }
+    attSection.appendChild(attList);
+
+    const fileInput = h('input', {
+      type: 'file',
+      style: { display: 'none' },
+      onChange: async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        uploadingAttachment = true;
+        redraw();
+        try {
+          const r = await API.uploadAttachment(task.id, file);
+          attachments = attachments || [];
+          attachments.unshift(r.attachment);
+          window._pmAttachmentsCache[task.id] = attachments;
+          task.attachments = (task.attachments || 0) + 1;
+          toast('Attachment uploaded', 'success');
+        } catch (err) {
+          toast('Upload failed: ' + err.message, 'error');
+        } finally {
+          uploadingAttachment = false;
+          e.target.value = '';
+          redraw();
+        }
+      },
+    });
+    attSection.appendChild(fileInput);
+    attSection.appendChild(h('div', { style: { marginTop: '10px' } },
+      h('button', {
+        class: 'btn btn-ghost',
+        disabled: uploadingAttachment,
+        onClick: () => fileInput.click(),
+      }, Icon('plus', 12), uploadingAttachment ? ' Uploading…' : ' Upload file'),
+    ));
+    body.appendChild(attSection);
+
     // Comments
     const cmtSection = h('div', { style: { marginTop: '24px' } });
     cmtSection.appendChild(h('div', {
@@ -376,6 +466,14 @@ function PropLabel(icon, text) {
   return h('div', {
     style: { display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--fg-3)', fontSize: '12px', fontWeight: '500' }
   }, Icon(icon, 13), text);
+}
+
+function formatBytes(n) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = Math.max(0, Number(n) || 0);
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
 window.renderTaskDetail = renderTaskDetail;

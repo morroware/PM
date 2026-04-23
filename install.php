@@ -250,6 +250,22 @@ function pm_install_schema(): void {
             INDEX idx_sv_user (user_id),
             CONSTRAINT fk_sv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+
+        "CREATE TABLE IF NOT EXISTS task_attachments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            task_id INT NOT NULL,
+            stored_name VARCHAR(255) NOT NULL,
+            original_name VARCHAR(255) NOT NULL,
+            mime_type VARCHAR(120) NULL,
+            size_bytes BIGINT NOT NULL DEFAULT 0,
+            uploaded_by INT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_ta_stored (stored_name),
+            INDEX idx_ta_task (task_id),
+            INDEX idx_ta_user (uploaded_by),
+            CONSTRAINT fk_ta_task_attachment FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+            CONSTRAINT fk_ta_user_attachment FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     ];
     foreach ($sql as $q) $pdo->exec($q);
 
@@ -264,9 +280,25 @@ function pm_install_schema(): void {
     pm_migrate_add_index_if_missing('labels', 'idx_lbl_project', '(project_id)');
     pm_migrate_add_index_if_missing('tasks',  'idx_recurring',   '(recurring_rule_id)');
     pm_migrate_add_column_if_missing('comments', 'updated_at',   'TIMESTAMP NULL');
+    pm_migrate_add_column_if_missing('task_attachments', 'stored_name',   'VARCHAR(255) NOT NULL');
+    pm_migrate_add_column_if_missing('task_attachments', 'original_name', 'VARCHAR(255) NOT NULL');
+    pm_migrate_add_column_if_missing('task_attachments', 'mime_type',     'VARCHAR(120) NULL');
+    pm_migrate_add_column_if_missing('task_attachments', 'size_bytes',    'BIGINT NOT NULL DEFAULT 0');
+    pm_migrate_add_column_if_missing('task_attachments', 'uploaded_by',   'INT NULL');
+    pm_migrate_add_column_if_missing('task_attachments', 'created_at',    'TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
     pm_migrate_add_fk_if_missing(
         'labels', 'fk_lbl_project',
         'FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE'
+    );
+    pm_migrate_add_index_if_missing('task_attachments', 'idx_ta_task', '(task_id)');
+    pm_migrate_add_index_if_missing('task_attachments', 'idx_ta_user', '(uploaded_by)');
+    pm_migrate_add_fk_if_missing(
+        'task_attachments', 'fk_ta_task_attachment',
+        'FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE'
+    );
+    pm_migrate_add_fk_if_missing(
+        'task_attachments', 'fk_ta_user_attachment',
+        'FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL'
     );
 }
 

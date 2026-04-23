@@ -4,9 +4,13 @@ const API = {
   base: 'api',
 
   async request(path, opts = {}) {
+    const hasBody = Object.prototype.hasOwnProperty.call(opts, 'body');
+    const isFormData = hasBody && (opts.body instanceof FormData);
     const res = await fetch(`${this.base}/${path}`, {
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      headers: isFormData
+        ? { 'Accept': 'application/json' }
+        : { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       ...opts,
     });
     let body;
@@ -65,6 +69,13 @@ const API = {
   updateComment(taskId, commentId, body) { return this.patch(`tasks.php?id=${taskId}&comments=1&comment_id=${commentId}`, { body }); },
   deleteComment(taskId, commentId) { return this.del(`tasks.php?id=${taskId}&comments=1&comment_id=${commentId}`); },
   bulkUpdateTasks(taskIds, patch) { return this.patch('tasks.php?bulk=1', { task_ids: taskIds, patch }); },
+  listAttachments(taskId) { return this.get(`attachments.php?task_id=${taskId}`); },
+  uploadAttachment(taskId, file) {
+    const form = new FormData();
+    form.append('file', file);
+    return this.request(`attachments.php?task_id=${taskId}`, { method: 'POST', body: form });
+  },
+  deleteAttachment(id) { return this.del(`attachments.php?id=${id}`); },
 
   // ---- projects ----
   listProjects(opts = {})   {
