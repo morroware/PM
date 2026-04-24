@@ -9,8 +9,12 @@ $errors = [];
 $ok = [];
 $summary = [];
 
+// Ensure this endpoint renders as HTML when visited in a browser.
+header('Content-Type: text/html; charset=utf-8');
+header('X-Content-Type-Options: nosniff');
+header('Cache-Control: no-store');
+
 try {
-    pm_boot();
     pm_db();
 } catch (Throwable $e) {
     $errors[] = 'Bootstrap/DB failed: ' . $e->getMessage();
@@ -27,14 +31,14 @@ function sp_seed_data(): array {
     $pdo = pm_db();
 
     $users = [
-        ['Mike',  'Facilities Director', '#3B82F6', 1, 'mike@castle.local'],
-        ['Dylan', 'IT / Network Tech',   '#22C55E', 0, 'dylan@castle.local'],
-        ['Mars',  'Arcade Technician',   '#A855F7', 0, 'mars@castle.local'],
-        ['Izzy',  'Rides Supervisor',    '#F59E0B', 0, 'izzy@castle.local'],
-        ['Seth',  'Safety & Compliance', '#EF4444', 0, 'seth@castle.local'],
+        ['Mike-admin', 'Admin',                '#3B82F6', 1, 'mike-admin@castle.local'],
+        ['Dylan',      'Tech Manager',         '#22C55E', 0, 'dylan@castle.local'],
+        ['Mars',       'Asst Tech Manager',    '#A855F7', 0, 'mars@castle.local'],
+        ['Seth',       'Arcade Technician',    '#EF4444', 0, 'seth@castle.local'],
+        ['Izze',       'Arcade Technician',    '#F59E0B', 0, 'izze@castle.local'],
     ];
 
-    // Projects themed around Castle Fun Center attractions and facility ops.
+        // Projects themed around Castle Fun Center (Chester, NY) attractions and facility ops.
     $projects = [
         ['Arcade Operations',       '#8B5CF6', 'ARC', 'Prize counters, game cabinets, card swipes, and redemption support.'],
         ['Roller Rink',             '#06B6D4', 'RNK', 'Floor care, skate rental fleet, lighting, and music/PA readiness.'],
@@ -149,7 +153,7 @@ function sp_seed_data(): array {
                 $ref = sprintf('%s-%d', $pKey, $seq);
                 $due = (new DateTimeImmutable('today'))->modify($offset)->format('Y-m-d');
 
-                $creator = $userIds['Mike'];
+                $creator = $userIds['Mike-admin'];
                 pm_exec(
                     'INSERT INTO tasks (ref, project_id, status, title, description, priority, due, estimate, created_by)
                      VALUES (?,?,?,?,?,?,?,?,?)',
@@ -160,7 +164,7 @@ function sp_seed_data(): array {
                 $allTaskIds[] = $tid;
 
                 // Assignees: primary rotating + Seth on safety/compliance style work.
-                $rotation = ['Dylan','Mars','Izzy','Seth'];
+                $rotation = ['Dylan','Mars','Izze','Seth'];
                 $primaryName = $rotation[$idx % count($rotation)];
                 pm_exec('INSERT INTO task_assignees (task_id, user_id) VALUES (?,?)', [$tid, $userIds[$primaryName]]);
                 if (in_array('Safety', $taskLabels, true) || in_array('Compliance', $taskLabels, true)) {
@@ -182,7 +186,7 @@ function sp_seed_data(): array {
                     pm_exec('INSERT INTO subtasks (task_id, text, done, sort_order) VALUES (?,?,?,?)', [$tid, $sub, $done, $sidx]);
                 }
 
-                pm_exec('INSERT INTO comments (task_id, user_id, body) VALUES (?,?,?)', [$tid, $userIds['Mike'], 'Please prioritize before weekend traffic.']);
+                pm_exec('INSERT INTO comments (task_id, user_id, body) VALUES (?,?,?)', [$tid, $userIds['Mike-admin'], 'Please prioritize before weekend traffic at Castle Fun Center in Chester, NY.']);
                 pm_exec('INSERT INTO comments (task_id, user_id, body) VALUES (?,?,?)', [$tid, $userIds[$primaryName], 'Acknowledged. Parts/tools check in progress.']);
 
                 pm_exec('INSERT INTO activity (user_id, task_id, action, detail) VALUES (?,?,?,?)', [$creator, $tid, 'created', 'Seeded initial task']);
@@ -192,7 +196,7 @@ function sp_seed_data(): array {
 
         // Recurring preventive maintenance task templates (one per major project).
         foreach ($projectIds as $pName => $pid) {
-            $assignees = json_encode([$userIds['Dylan'], $userIds['Izzy']]);
+            $assignees = json_encode([$userIds['Dylan'], $userIds['Izze']]);
             $labels = json_encode(array_values(array_filter([
                 $labelIds['Preventive'] ?? null,
                 $labelIds[$pName . '::Inspection'] ?? null,
@@ -212,7 +216,7 @@ function sp_seed_data(): array {
                     1,
                     1,
                     (new DateTimeImmutable('next monday'))->format('Y-m-d'),
-                    $userIds['Mike'],
+                    $userIds['Mike-admin'],
                 ]
             );
         }
@@ -233,7 +237,7 @@ function sp_seed_data(): array {
 
         // App-level settings and integration placeholders.
         $settings = [
-            'app.name' => 'Castle Tech Tasks',
+            'app.name' => 'Castle Fun Center Tech Tasks',
             'slack.enabled' => '0',
             'slack.channel_default' => '#castle-tech',
             'slack.events' => json_encode([
@@ -245,7 +249,7 @@ function sp_seed_data(): array {
                 'mention_added' => true,
             ]),
             'seed.generated_at' => gmdate('c'),
-            'seed.notes' => 'Data modeled for attractions and maintenance flows at a family entertainment center.',
+            'seed.notes' => 'Data modeled for attractions and maintenance flows at Castle Fun Center in Chester, NY.',
         ];
         foreach ($settings as $k => $v) {
             pm_exec('INSERT INTO app_settings (name, value) VALUES (?,?)', [$k, $v]);
@@ -331,9 +335,10 @@ ul { margin: 8px 0 0; }
     <div class="card">
         <h2>Seed profile</h2>
         <ul>
-            <li>Users: Mike, Dylan, Mars, Izzy, Seth (Mike is admin)</li>
+            <li>Users: Mike-admin (Admin), Dylan (Tech Manager), Mars (Asst Tech Manager), Seth + Izze (Arcade Technicians)</li>
             <li>Projects: Arcade, Roller Rink, HVAC, InflataPark/Ballocity, Bowling, Axe Throwing, Go Karts/Outdoor, Laser Tag</li>
             <li>Task mix: todo, in progress, review, backlog, done</li>
+            <li>Location context: Castle Fun Center, Chester, NY</li>
             <li>Includes recurring weekly PM rules + saved views for each user</li>
         </ul>
     </div>
