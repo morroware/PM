@@ -201,7 +201,8 @@ The installer includes additive migration helpers to backfill missing columns/in
 ## Authorization model
 
 - All task read/write operations require authentication.
-- Project/label/Slack/recurring write operations require admin privileges.
+- Project/label/task write operations are available to all authenticated users.
+- Slack/recurring settings write operations require admin privileges.
 - User role/admin mutations require admin privileges.
 - Server-side checks are authoritative (UI visibility is not the only control).
 

@@ -83,7 +83,6 @@ if ($method === 'GET' && $id === null) {
 }
 
 if ($method === 'POST' && $id === null && $action !== 'merge') {
-    pm_require_admin();
     $name      = trim((string)pm_param('name', ''));
     $color     = (string)pm_param('color', 'slate');
     $projectId = pm_int_param('project_id');
@@ -137,7 +136,6 @@ if ($method === 'POST' && $id !== null && $action === 'merge') {
 }
 
 if ($method === 'PATCH' && $id !== null) {
-    pm_require_admin();
     $body = pm_body();
     $f = []; $p = [];
 
@@ -188,7 +186,6 @@ if ($method === 'PATCH' && $id !== null) {
 }
 
 if ($method === 'DELETE' && $id !== null) {
-    pm_require_admin();
     $force = !empty($_GET['force']);
     $useCount = (int)(pm_fetch_one('SELECT COUNT(*) AS c FROM task_labels WHERE label_id = ?', [$id])['c'] ?? 0);
     if ($useCount > 0 && !$force) {
