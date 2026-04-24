@@ -121,7 +121,6 @@
     return state.labels;
   }
   async function createLabelFromPicker(name, projectId = null) {
-    if (!state.me?.is_admin) throw new Error('Only admins can create labels');
     const payload = { name, color: 'slate' };
     if (projectId != null) payload.project_id = projectId;
     const r = await API.createLabel(payload);
@@ -445,12 +444,10 @@
     bar.appendChild(h('button', { class: 'btn btn-primary',
       onClick: () => { state.quickAddStatus = 'todo'; state.quickAddDefaults = null; state.quickAddOpen = true; renderApp(); } },
       Icon('plus', 14), ' New task'));
-    if (state.me.is_admin) {
-      bar.appendChild(h('button', {
-        class: 'btn btn-muted',
-        onClick: () => { state.settingsOpen = true; renderApp(); },
-      }, Icon('settings', 14), ' Settings'));
-    }
+    bar.appendChild(h('button', {
+      class: 'btn btn-muted',
+      onClick: () => { state.settingsOpen = true; renderApp(); },
+    }, Icon('settings', 14), ' Settings'));
     return bar;
   }
 
@@ -954,7 +951,7 @@
       model.loading = true;
       redraw();
       try {
-        const r = await API.listProjects({ includeArchived: model.includeArchived });
+        const r = await API.listProjects({ onlyActive: !model.includeArchived });
         model.projects = r.projects || [];
       } catch (e) {
         model.err = e.message || 'Failed to load projects';
@@ -1268,7 +1265,7 @@
       modal.replaceChildren();
       modal.appendChild(h('div', { class: 'settings-head' },
         Icon('settings', 15),
-        h('div', { class: 'settings-title' }, 'Admin settings'),
+        h('div', { class: 'settings-title' }, state.me?.is_admin ? 'Admin settings' : 'Workspace settings'),
         h('button', { class: 'btn btn-ghost', onClick: close }, Icon('x', 14), ' Close'),
       ));
 
@@ -1278,7 +1275,7 @@
       const head = h('div', { class: 'settings-section-head' },
         h('div', null,
           h('h3', null, 'Projects'),
-          h('div', { class: 'sub' }, 'Create, edit, archive, and review projects. Archived projects are hidden from the sidebar by default.'),
+          h('div', { class: 'sub' }, 'Create, edit, archive, and review all workspace projects.'),
         ),
         h('label', { class: 'check-row', style: { whiteSpace: 'nowrap' } },
           h('input', {
@@ -1431,14 +1428,14 @@
         body.appendChild(labelList);
       }
 
-      body.appendChild(h('div', { class: 'settings-section-head', style: { marginTop: '20px' } },
+      if (state.me?.is_admin) body.appendChild(h('div', { class: 'settings-section-head', style: { marginTop: '20px' } },
         h('div', null,
           h('h3', null, 'Slack integration'),
           h('div', { class: 'sub' }, 'Manage bot token, default channel, event toggles, templates, and test delivery.'),
         ),
       ));
-      if (model.slackLoading) body.appendChild(h('div', { class: 'empty' }, 'Loading Slack settings…'));
-      else {
+      if (state.me?.is_admin && model.slackLoading) body.appendChild(h('div', { class: 'empty' }, 'Loading Slack settings…'));
+      else if (state.me?.is_admin) {
         const slackForm = h('div', { class: 'settings-form' });
         slackForm.appendChild(h('div', { class: 'full check-grid' },
           h('label', { class: 'check-row' },
@@ -1495,6 +1492,8 @@
           model.slack.last_error ? h('span', null, `Last error: ${model.slack.last_error}`) : null,
         ));
       }
+
+      if (!state.me?.is_admin) return;
 
       body.appendChild(h('div', { class: 'settings-section-head', style: { marginTop: '20px' } },
         h('div', null,
@@ -1638,8 +1637,10 @@
 
     refreshProjects();
     refreshLabelsAdmin();
-    refreshSlack();
-    refreshRecurringAdmin();
+    if (state.me?.is_admin) {
+      refreshSlack();
+      refreshRecurringAdmin();
+    }
     redraw();
     return frag;
   }

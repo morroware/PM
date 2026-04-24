@@ -30,12 +30,21 @@ function pm_list_attachments(int $taskId): void {
 function pm_upload_attachment(int $taskId): void {
     $task = pm_fetch_one('SELECT id FROM tasks WHERE id = ?', [$taskId]);
     if (!$task) pm_error('Task not found', 404);
-    if (!isset($_FILES['file'])) pm_error('file is required');
+    if (!isset($_FILES['file'])) {
+        $maxBytes = pm_ini_bytes((string)ini_get('post_max_size'));
+        $contentLength = isset($_SERVER['CONTENT_LENGTH']) ? (int)$_SERVER['CONTENT_LENGTH'] : 0;
+        if ($maxBytes > 0 && $contentLength > $maxBytes) {
+            pm_error('Upload exceeds server post_max_size limit', 413);
+        }
+        pm_error('file is required');
+    }
     $f = $_FILES['file'];
     if (!is_array($f)) pm_error('Invalid upload payload');
     $err = (int)($f['error'] ?? UPLOAD_ERR_NO_FILE);
     if ($err !== UPLOAD_ERR_OK) {
-        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) pm_error('File exceeds upload limit', 413);
+        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
+            pm_error('File exceeds server upload limit', 413);
+        }
         pm_error('Upload failed', 400);
     }
 
@@ -78,6 +87,17 @@ function pm_upload_attachment(int $taskId): void {
         [pm_last_id()]
     );
     pm_json(['attachment' => pm_attachment_shape($row)], 201);
+}
+
+function pm_ini_bytes(string $val): int {
+    $v = trim($val);
+    if ($v === '') return 0;
+    $n = (int)$v;
+    $u = strtolower(substr($v, -1));
+    if ($u === 'g') return $n * 1024 * 1024 * 1024;
+    if ($u === 'm') return $n * 1024 * 1024;
+    if ($u === 'k') return $n * 1024;
+    return $n;
 }
 
 function pm_download_attachment(int $id): void {

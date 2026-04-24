@@ -24,12 +24,13 @@ function pm_project_shape(array $r): array {
 }
 
 if ($method === 'GET' && $id === null) {
-    // By default we exclude archived projects from the main list to keep the
-    // sidebar uncluttered. Admin Settings passes include_archived=1.
-    $includeArchived = !empty($_GET['include_archived']);
+    // Visibility default is full workspace visibility: all authenticated users
+    // can see all projects, including archived ones. Clients can still pass
+    // only_active=1 when they intentionally want to hide archived projects.
+    $onlyActive = !empty($_GET['only_active']);
     $sql = 'SELECT id, name, color, key_prefix, description, slack_channel, sort_order, archived, archived_at
             FROM projects'
-         . ($includeArchived ? '' : ' WHERE archived = 0')
+         . ($onlyActive ? ' WHERE archived = 0' : '')
          . ' ORDER BY archived, sort_order, id';
     $rows = pm_fetch_all($sql);
     pm_json(['projects' => array_map('pm_project_shape', $rows)]);
@@ -49,7 +50,6 @@ if ($method === 'GET' && $id !== null) {
 }
 
 if ($method === 'POST' && $id === null) {
-    pm_require_admin();
     $name   = trim((string)pm_param('name', ''));
     $color  = (string)pm_param('color', '#3B82F6');
     $prefix = strtoupper(trim((string)pm_param('key_prefix', 'PRJ')));
@@ -77,7 +77,6 @@ if ($method === 'POST' && $id === null) {
 }
 
 if ($method === 'PATCH' && $id !== null) {
-    pm_require_admin();
     $body = pm_body();
     $f = []; $p = [];
     if (isset($body['name']))   {
@@ -151,7 +150,6 @@ if ($method === 'PATCH' && $id !== null) {
 }
 
 if ($method === 'DELETE' && $id !== null) {
-    pm_require_admin();
     $row = pm_fetch_one('SELECT name FROM projects WHERE id = ?', [$id]);
     if (!$row) pm_error('Not found', 404);
     // Guard hard delete: if any tasks (or recurring rules) reference the

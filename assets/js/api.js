@@ -79,7 +79,7 @@ const API = {
 
   // ---- projects ----
   listProjects(opts = {})   {
-    const q = opts.includeArchived ? '?include_archived=1' : '';
+    const q = opts.onlyActive ? '?only_active=1' : '';
     return this.get('projects.php' + q);
   },
   getProject(id)            { return this.get(`projects.php?id=${id}`); },
