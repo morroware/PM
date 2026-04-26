@@ -39,6 +39,7 @@
     quickAddOpen: false,
     quickAddStatus: 'todo',
     settingsOpen: false,
+    mobileSidebarOpen: false,
   };
   const saved = localStorage.getItem('pm_project');
   if (saved && saved !== 'null') state.filterProject = parseInt(saved, 10);
@@ -233,10 +234,19 @@
 
   // ----- render root -----
   function renderApp() {
+    if (window.innerWidth > 980 && state.mobileSidebarOpen) state.mobileSidebarOpen = false;
     const app = h('div', { class: 'app' });
+    if (state.mobileSidebarOpen) app.classList.add('mobile-nav-open');
     app.appendChild(renderSidebar());
     app.appendChild(renderMain());
     mount(rootEl, app);
+    if (state.mobileSidebarOpen) {
+      rootEl.appendChild(h('button', {
+        class: 'scrim mobile-nav-scrim',
+        'aria-label': 'Close navigation',
+        onClick: () => { state.mobileSidebarOpen = false; renderApp(); },
+      }));
+    }
 
     if (state.openTaskId) {
       const t = state.tasks.find(x => x.id === state.openTaskId);
@@ -312,6 +322,7 @@
         onClick: () => {
           state.filterProject = isActive ? null : p.id;
           if (state.view === 'dashboard') state.view = 'kanban';
+          if (window.innerWidth <= 980) state.mobileSidebarOpen = false;
           persist(); renderApp();
         },
       },
@@ -328,7 +339,11 @@
     labelSection.appendChild(h('div', { class: 'nav-label' }, 'Labels'));
     for (const l of state.labels.slice(0, 5)) {
       labelSection.appendChild(h('div', { class: 'nav-item', style: { padding: '5px 10px' },
-        onClick: () => { state.filterLabels = [l.id]; state.view = 'list'; persist(); renderApp(); } },
+        onClick: () => {
+          state.filterLabels = [l.id]; state.view = 'list';
+          if (window.innerWidth <= 980) state.mobileSidebarOpen = false;
+          persist(); renderApp();
+        } },
         h('span', {
           style: {
             width: '10px', height: '10px', padding: 0, borderRadius: '3px',
@@ -359,7 +374,11 @@
   }
 
   function NavItem(icon, label, active, onClick, count) {
-    const el = h('div', { class: 'nav-item' + (active ? ' active' : ''), onClick },
+    const wrappedClick = () => {
+      onClick();
+      if (window.innerWidth <= 980) state.mobileSidebarOpen = false;
+    };
+    const el = h('div', { class: 'nav-item' + (active ? ' active' : ''), onClick: wrappedClick },
       Icon(icon, 15),
       h('span', null, label),
     );
@@ -421,6 +440,11 @@
 
   function renderTopbar() {
     const bar = h('div', { class: 'topbar' });
+    bar.appendChild(h('button', {
+      class: 'icon-btn mobile-nav-toggle',
+      title: 'Open navigation',
+      onClick: () => { state.mobileSidebarOpen = !state.mobileSidebarOpen; renderApp(); },
+    }, Icon('list', 16)));
     const proj = state.filterProject ? projectById(state.filterProject) : null;
     const viewLabels = { dashboard: 'Dashboard', kanban: 'Kanban', list: 'List', checklist: 'My tasks', calendar: 'Calendar' };
     bar.appendChild(h('div', { class: 'crumbs' },
