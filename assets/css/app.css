@@ -54,6 +54,16 @@ html, body { margin:0; padding:0; background: var(--bg-0); color: var(--fg-0); f
 body { min-height: 100vh; overflow: hidden; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 input, textarea { font: inherit; color: inherit; }
+button:disabled,
+input:disabled,
+textarea:disabled { cursor: not-allowed; opacity: 0.65; }
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--acc-1);
+  outline-offset: 2px;
+}
 ::selection { background: var(--acc-soft); color: var(--fg-0); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -137,7 +147,7 @@ input, textarea { font: inherit; color: inherit; }
 .search {
   margin-left: auto; display: flex; align-items: center; gap: 8px;
   background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px;
-  padding: 6px 10px; width: 280px; transition: all 0.15s;
+  padding: 6px 10px; width: min(320px, 44vw); min-width: 170px; transition: all 0.15s;
 }
 .search:focus-within { border-color: var(--acc-border); background: var(--bg-3); box-shadow: 0 0 0 3px var(--acc-soft); }
 .search input { flex:1; background: none; border: 0; outline: none; font-size: 13px; color: var(--fg-0); }
@@ -483,3 +493,18 @@ input, textarea { font: inherit; color: inherit; }
 
 .settings-status { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--fg-3); margin-top: 8px; }
 .settings-status.err { color: #FCA5A5; }
+
+@media (max-width: 980px) {
+  .topbar { padding: 0 12px; gap: 8px; }
+  .crumbs { display: none; }
+  .search { width: min(250px, 52vw); }
+  .filters { padding: 10px 12px; gap: 8px; overflow-x: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

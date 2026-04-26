@@ -83,6 +83,9 @@ function renderDashboard(tasks, { onOpenTask, onNavigate, activity }) {
   const wlCard = Card({ gridColumn: 'span 5' });
   wlCard.appendChild(CardHeader('Team workload', 'Open tasks per teammate'));
   const wlBody = h('div', { style: { padding: '4px 16px 16px', display: 'grid', gap: '10px' } });
+  if (!workload.length) {
+    wlBody.appendChild(h('div', { class: 'empty', style: { padding: '16px' } }, 'No teammates to show yet.'));
+  }
   for (const w of workload) {
     wlBody.appendChild(h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
       Avatar(w.user, 26),
@@ -106,6 +109,9 @@ function renderDashboard(tasks, { onOpenTask, onNavigate, activity }) {
   const pCard = Card({ gridColumn: 'span 7' });
   pCard.appendChild(CardHeader('Active projects'));
   const pBody = h('div', { style: { padding: '0 16px 16px', display: 'grid', gap: '8px', gridTemplateColumns: 'repeat(2, 1fr)' } });
+  if (!projects.length) {
+    pBody.appendChild(h('div', { class: 'empty', style: { gridColumn: '1 / -1', padding: '16px' } }, 'Create your first project in Admin settings.'));
+  }
   for (const p of projects) {
     const pTasks = tasks.filter(x => x.project == p.id);
     const pDone = pTasks.filter(x => x.status === 'done').length;
