@@ -135,6 +135,11 @@ after logging in with `curl -c cookie.txt -d '...' .../api/auth.php?action=login
 | 7.2 | Delete a project with cascade | Tasks, task_labels, task_assignees, subtasks, comments for those tasks all removed. |
 | 7.3 | Delete a label in use with `force=1` | `task_labels` rows for that label disappear; tasks survive. |
 | 7.4 | Re-run `/install.php` on an existing database | No destructive changes; idempotent `pm_migrate_*` helpers only add missing columns/indexes. |
+| 7.5 | PATCH a task with both `title` and `status` in the same body | Activity log records `old → new` with the *real* old status, not a stray character of the new title. |
+| 7.6 | Member (non-admin) selects rows in List and clicks "Mark done" / "Set due" | Bulk update succeeds (200); affected tasks reflect the change after refresh. |
+| 7.7 | Open recurring rule editor, save with priority "Urgent" | Stored value is `0` (matches task priority semantics); spawned task shows the Urgent flag. |
+| 7.8 | Hit `/seed.php` while signed out (after install) | Form is hidden behind a "Seeder locked" notice; submitting still 403s. |
+| 7.9 | View dashboard activity feed five minutes after creating a task | "5m ago" label is correct regardless of cPanel host time zone. |
 
 ## 8. Known-good seed data recipe
 

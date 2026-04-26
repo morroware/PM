@@ -14,11 +14,52 @@ header('Content-Type: text/html; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');
 
+// Boot the session before doing anything destructive. Without an authenticated
+// admin in the session, the seeder must NOT execute — a wide-open destructive
+// endpoint behind a "type the words on screen" prompt is not an auth boundary.
+$cfg = null;
+try { $cfg = pm_config(); } catch (Throwable $e) { $errors[] = $e->getMessage(); }
+
+if (!$errors && session_status() === PHP_SESSION_NONE) {
+    session_name($cfg['session_name']);
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path'     => '/',
+        'secure'   => !empty($cfg['cookie_secure']),
+        'httponly' => true,
+        'samesite' => $cfg['cookie_samesite'] ?? 'Lax',
+    ]);
+    session_start();
+}
+
 try {
     pm_db();
 } catch (Throwable $e) {
     $errors[] = 'Bootstrap/DB failed: ' . $e->getMessage();
 }
+
+// Determine whether anyone is logged in as admin. If no users table exists
+// yet (fresh install) we treat that as "not locked" so the seeder is usable
+// during initial setup; once an admin exists, only that admin can re-seed.
+$adminExists = false;
+$currentAdmin = null;
+$tablesReady  = false;
+if (!$errors) {
+    try {
+        $row = pm_fetch_one('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1');
+        $adminExists = !empty($row) && (int)$row['c'] > 0;
+        $tablesReady = true;
+    } catch (Throwable $_) {
+        // users table doesn't exist — install hasn't run yet.
+        $adminExists = false;
+    }
+    if ($adminExists) {
+        $currentAdmin = pm_current_user();
+        if ($currentAdmin && empty($currentAdmin['is_admin'])) $currentAdmin = null;
+    }
+}
+
+$seedLocked = $adminExists && !$currentAdmin;
 
 function sp_make_initials(string $name): string {
     $parts = preg_split('/\s+/', trim($name));
@@ -275,15 +316,22 @@ function sp_seed_data(): array {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$errors) {
-    $confirm = trim((string)($_POST['confirm_phrase'] ?? ''));
-    if ($confirm !== 'SEED CASTLE DATA') {
-        $errors[] = 'Confirmation phrase mismatch. Type exactly: SEED CASTLE DATA';
+    if ($seedLocked) {
+        $errors[] = 'Seeder is locked: an admin already exists. Sign in as an admin on login.html before re-running, or delete seed.php.';
     } else {
-        try {
-            $summary = sp_seed_data();
-            $ok[] = 'Database reseeded successfully.';
-        } catch (Throwable $e) {
-            $errors[] = 'Seed failed: ' . $e->getMessage();
+        $confirm = trim((string)($_POST['confirm_phrase'] ?? ''));
+        if ($confirm !== 'SEED CASTLE DATA') {
+            $errors[] = 'Confirmation phrase mismatch. Type exactly: SEED CASTLE DATA';
+        } else {
+            try {
+                $summary = sp_seed_data();
+                $ok[] = 'Database reseeded successfully.';
+                // The TRUNCATE wiped the users table — including the admin we
+                // were running as — so drop the now-stale session pointer.
+                if (isset($_SESSION['uid'])) unset($_SESSION['uid']);
+            } catch (Throwable $e) {
+                $errors[] = 'Seed failed: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -322,14 +370,24 @@ ul { margin: 8px 0 0; }
         <div class="warn"><strong>Danger:</strong> This script truncates most application tables before reseeding. Use on staging/new installs only, or backup first.</div>
         <div class="warn">Default seeded login password for all users: <code>CastleSeed!2026</code></div>
 
+        <?php if ($seedLocked): ?>
+        <div class="err"><strong>Seeder locked.</strong> An admin account already exists in this database, so the seeder will not run. <a href="login.html">Sign in as an admin</a> first if you really want to wipe and reseed, or — better — delete <code>seed.php</code> from the server.</div>
+        <?php elseif ($tablesReady && $currentAdmin): ?>
+        <div class="warn">Signed in as admin <strong><?= htmlspecialchars($currentAdmin['name'] ?? 'admin') ?></strong>. Reseeding will sign you out (your user row is recreated from the seed dataset).</div>
+        <?php elseif (!$tablesReady): ?>
+        <div class="warn">No users table found. Run <a href="install.php"><code>install.php</code></a> first; the seeder needs the schema in place before it can populate it.</div>
+        <?php endif; ?>
+
         <?php foreach ($errors as $e): ?><div class="err"><?= htmlspecialchars($e) ?></div><?php endforeach; ?>
         <?php foreach ($ok as $m): ?><div class="ok"><?= htmlspecialchars($m) ?></div><?php endforeach; ?>
 
+        <?php if (!$seedLocked): ?>
         <form method="post">
             <label for="confirm_phrase">Type <code>SEED CASTLE DATA</code> to confirm destructive reset:</label>
             <input id="confirm_phrase" name="confirm_phrase" type="text" required autocomplete="off" placeholder="SEED CASTLE DATA">
-            <button type="submit">Reset + Seed Database</button>
+            <button type="submit"<?= $tablesReady ? '' : ' disabled style="opacity:.5;cursor:not-allowed"' ?>>Reset + Seed Database</button>
         </form>
+        <?php endif; ?>
     </div>
 
     <div class="card">

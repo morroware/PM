@@ -27,6 +27,11 @@ function pm_db(): PDO {
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
         ]);
+        // Pin the session time zone to UTC so TIMESTAMP reads/writes are
+        // consistent regardless of the cPanel host's local TZ. The frontend
+        // (relTime in dashboard.js, detail.js) already parses these strings
+        // as UTC, so without this clients see "X ago" off by hours.
+        try { $pdo->exec("SET time_zone = '+00:00'"); } catch (Throwable $_) { /* best effort */ }
     } catch (PDOException $e) {
         http_response_code(500);
         header('Content-Type: application/json');

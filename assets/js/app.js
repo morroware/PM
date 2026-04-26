@@ -615,6 +615,10 @@
         });
         close();
         state.openTaskId = t.id;
+        // Keep the URL hash in sync so the new task is shareable as a deep
+        // link the same way it would be if the drawer had been opened by
+        // clicking a card.
+        setTaskHash(t.id);
         renderApp();
       } catch (e) { toast(e.message, 'error'); }
     }
@@ -913,7 +917,10 @@
       model.recurringForm.project_id = r?.project_id ? String(r.project_id) : '';
       model.recurringForm.title = r?.title ?? '';
       model.recurringForm.description = r?.description ?? '';
-      model.recurringForm.priority = Number(r?.priority ?? 2) || 2;
+      // Don't fall through `|| 2` because 0 (Urgent) is a valid priority and
+      // would otherwise get coerced to Medium when re-opening the rule.
+      const pri = r?.priority == null ? 2 : Number(r.priority);
+      model.recurringForm.priority = Number.isFinite(pri) ? Math.max(0, Math.min(3, pri)) : 2;
       model.recurringForm.estimate = r?.estimate ?? '';
       model.recurringForm.assignees = Array.isArray(r?.assignees) ? r.assignees.map(Number).filter(Boolean) : [];
       model.recurringForm.labels = Array.isArray(r?.labels) ? r.labels.map(Number).filter(Boolean) : [];
@@ -1066,7 +1073,9 @@
         project_id: Number(f.project_id),
         title: (f.title || '').trim(),
         description: (f.description || '').trim(),
-        priority: Math.max(1, Math.min(4, Number(f.priority) || 2)),
+        // Tasks use priority 0..3 (PRIO_LABELS = Urgent/High/Medium/Low). The
+        // UI dropdown writes those same numbers, so just clamp into range.
+        priority: Math.max(0, Math.min(3, Number(f.priority))),
         estimate: (f.estimate || '').trim() || null,
         assignees: Array.isArray(f.assignees) ? f.assignees.map(Number).filter(Boolean) : [],
         labels: Array.isArray(f.labels) ? f.labels.map(Number).filter(Boolean) : [],
@@ -1519,11 +1528,13 @@
       ));
       recurringForm.appendChild(h('div', null,
         h('label', null, 'Priority'),
-        h('select', { value: String(model.recurringForm.priority), onChange: e => { model.recurringForm.priority = Number(e.target.value) || 2; } },
-          h('option', { value: '1' }, 'Low'),
+        h('select', { value: String(model.recurringForm.priority), onChange: e => { model.recurringForm.priority = Number(e.target.value); } },
+          // Match the task-priority convention used everywhere else
+          // (PRIO_LABELS): 0 = Urgent, 1 = High, 2 = Medium, 3 = Low.
+          h('option', { value: '0' }, 'Urgent'),
+          h('option', { value: '1' }, 'High'),
           h('option', { value: '2' }, 'Medium'),
-          h('option', { value: '3' }, 'High'),
-          h('option', { value: '4' }, 'Urgent'),
+          h('option', { value: '3' }, 'Low'),
         ),
       ));
       recurringForm.appendChild(h('div', null,
