@@ -494,15 +494,33 @@ function pm_comment_shape(array $r): array {
     ];
 }
 
+function pm_comments_have_updated_at(): bool {
+    static $has = null;
+    if ($has !== null) return $has;
+    $row = pm_fetch_one(
+        "SELECT 1 AS ok
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'comments'
+           AND COLUMN_NAME = 'updated_at'
+         LIMIT 1"
+    );
+    $has = (bool)$row;
+    return $has;
+}
+
 function pm_list_comments(int $taskId): void {
     // Distinguish "task exists, has no comments" (200, []) from "task gone"
     // (404) so the drawer can show an accurate empty state vs. an error.
     $taskExists = pm_fetch_one('SELECT id FROM tasks WHERE id = ?', [$taskId]);
     if (!$taskExists) pm_error('Task not found', 404);
+    $cols = pm_comments_have_updated_at()
+        ? 'c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color'
+        : 'c.id, c.body, c.created_at, NULL AS updated_at, c.user_id, u.name, u.initials, u.color';
     $rows = pm_fetch_all(
-        'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
+        "SELECT $cols
          FROM comments c LEFT JOIN users u ON u.id = c.user_id
-         WHERE c.task_id = ? ORDER BY c.id ASC',
+         WHERE c.task_id = ? ORDER BY c.id ASC",
         [$taskId]
     );
     pm_json(['comments' => array_map('pm_comment_shape', $rows)]);
@@ -523,9 +541,12 @@ function pm_add_comment(int $taskId): void {
         [$taskId, pm_current_user_id(), $body]);
     pm_log_activity(pm_current_user_id(), $taskId, 'commented', mb_substr($body, 0, 200));
     $cid = pm_last_id();
+    $cols = pm_comments_have_updated_at()
+        ? 'c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color'
+        : 'c.id, c.body, c.created_at, NULL AS updated_at, c.user_id, u.name, u.initials, u.color';
     $r = pm_fetch_one(
-        'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
-         FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?',
+        "SELECT $cols
+         FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?",
         [$cid]
     );
     $task = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
@@ -547,10 +568,17 @@ function pm_update_comment(int $taskId, int $commentId): void {
     $body = trim((string)pm_param('body', ''));
     if ($body === '') pm_error('Empty comment');
     if (mb_strlen($body) > 5000) pm_error('Comment is too long (max 5000 characters)');
-    pm_exec('UPDATE comments SET body = ?, updated_at = NOW() WHERE id = ? AND task_id = ?', [$body, $commentId, $taskId]);
+    if (pm_comments_have_updated_at()) {
+        pm_exec('UPDATE comments SET body = ?, updated_at = NOW() WHERE id = ? AND task_id = ?', [$body, $commentId, $taskId]);
+    } else {
+        pm_exec('UPDATE comments SET body = ? WHERE id = ? AND task_id = ?', [$body, $commentId, $taskId]);
+    }
+    $cols = pm_comments_have_updated_at()
+        ? 'c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color'
+        : 'c.id, c.body, c.created_at, NULL AS updated_at, c.user_id, u.name, u.initials, u.color';
     $r = pm_fetch_one(
-        'SELECT c.id, c.body, c.created_at, c.updated_at, c.user_id, u.name, u.initials, u.color
-         FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ? AND c.task_id = ?',
+        "SELECT $cols
+         FROM comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ? AND c.task_id = ?",
         [$commentId, $taskId]
     );
     $task = pm_fetch_one('SELECT * FROM tasks WHERE id = ?', [$taskId]);
