@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Register · Project Manager</title>
+<title>Register · Castle Tech Tasks</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -19,7 +19,7 @@
             </svg>
         </div>
         <div>
-            <div class="brand-name">Project Manager</div>
+            <div class="brand-name">Castle Tech Tasks</div>
             <div class="brand-sub">create account</div>
         </div>
     </div>
@@ -39,9 +39,26 @@
 
 <script src="assets/js/api.js?v=10"></script>
 <script>
+async function gateRegister() {
+    try {
+        const r = await API.me();
+        if (r.user) { return; } // signed-in admins can use this to create users
+        if (!r.allow_public_register) {
+            document.getElementById('err').textContent =
+                'Registration is disabled. Ask a Castle Tech admin to create your account.';
+            document.getElementById('err').style.display = '';
+            for (const el of form.querySelectorAll('input, button')) el.disabled = true;
+        }
+    } catch (_) {
+        // If the me endpoint fails, preserve current behavior and let submit
+        // surface the API-side error message.
+    }
+}
+
 const form = document.getElementById('reg-form');
 const err  = document.getElementById('err');
 const btn  = document.getElementById('submit');
+gateRegister();
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
     err.style.display = 'none';
