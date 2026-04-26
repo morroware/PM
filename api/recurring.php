@@ -211,11 +211,16 @@ function pm_recurring_save(array $input, ?int $existingId = null): int {
     if (!$proj) pm_error('Invalid project_id');
     if (!empty($proj['archived'])) pm_error('Cannot target an archived project', 409);
 
+    // Tasks accept priority 0..3 (Urgent..Low). Reject anything outside that
+    // range so spawned tasks don't end up with values the UI can't render.
+    $priority = isset($input['priority']) ? (int)$input['priority'] : 2;
+    if ($priority < 0 || $priority > 3) pm_error('Invalid priority');
+
     $shape = [
         'project_id'       => $projectId,
         'title'            => $title,
         'description'      => $input['description'] ?? null,
-        'priority'         => isset($input['priority']) ? (int)$input['priority'] : 2,
+        'priority'         => $priority,
         'estimate'         => isset($input['estimate']) ? (string)$input['estimate'] : null,
         'assignees'        => pm_encode_id_list($input['assignees'] ?? []),
         'labels'           => pm_encode_id_list($input['labels'] ?? []),

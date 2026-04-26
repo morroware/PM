@@ -308,9 +308,13 @@ function pm_update_task(int $id): void {
     // Validate per-column before touching the DB so callers get a clean 400
     // instead of a PDOException bubbled up as a 500.
     if (array_key_exists('title', $body)) {
-        $t = trim((string)$body['title']);
-        if ($t === '') pm_error('Title cannot be empty');
-        if (mb_strlen($t) > 500) pm_error('Title is too long (max 500 characters)');
+        // Don't reassign $t — that's the task row we still need below for the
+        // status-transition / activity-logging side effects. Trim the body
+        // value in place so the UPDATE picks up the trimmed string.
+        $newTitle = trim((string)$body['title']);
+        if ($newTitle === '') pm_error('Title cannot be empty');
+        if (mb_strlen($newTitle) > 500) pm_error('Title is too long (max 500 characters)');
+        $body['title'] = $newTitle;
     }
     if (array_key_exists('status', $body) && !pm_is_valid_status((string)$body['status'])) {
         pm_error('Invalid status');
@@ -590,10 +594,10 @@ function pm_notify_mentions(array $task, ?array $project, string $text): void {
 }
 
 function pm_bulk_update_tasks(): void {
-    // pm_require_admin() both guards auth and returns a guaranteed-non-null
-    // array, so downstream code never has to defend against $me being null
-    // (which caused PHP 8 fatals on mid-session user deletion).
-    pm_require_admin();
+    // Tasks are open to all authenticated users (see docs/regression-checklist
+    // §6) so bulk operations need to mirror that. pm_require_auth() is enough
+    // — every downstream branch only touches task rows, not workspace config.
+    pm_require_auth();
     $body = pm_body();
     $ids = array_values(array_unique(array_map('intval', (array)($body['task_ids'] ?? []))));
     if (!$ids) pm_error('task_ids required');
