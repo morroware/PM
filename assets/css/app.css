@@ -495,10 +495,27 @@ textarea:focus-visible,
 .settings-status.err { color: #FCA5A5; }
 
 @media (max-width: 980px) {
+  body { overflow: auto; }
+  .app { grid-template-columns: 1fr; height: auto; min-height: 100vh; }
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: min(84vw, 320px);
+    z-index: 90; transform: translateX(-100%);
+    transition: transform 0.2s ease-out;
+    box-shadow: var(--shadow-pop);
+  }
+  .app.mobile-nav-open .sidebar { transform: translateX(0); }
+  .main { min-height: 100vh; }
   .topbar { padding: 0 12px; gap: 8px; }
   .crumbs { display: none; }
   .search { width: min(250px, 52vw); }
   .filters { padding: 10px 12px; gap: 8px; overflow-x: auto; }
+  .mobile-nav-toggle { display: grid; flex-shrink: 0; }
+  .mobile-nav-scrim { z-index: 85; border: 0; width: 100%; }
+}
+
+@media (min-width: 981px) {
+  .mobile-nav-toggle { display: none; }
+  .mobile-nav-scrim { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
