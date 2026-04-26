@@ -64,6 +64,15 @@ function renderList(tasks, { onOpenTask, onAddTask, onToggleStatus, onBulkLabels
       return 0;
     }));
     groups = groups.filter(g => g.tasks.length);
+    if (!groups.length) {
+      root.appendChild(h('div', {
+        class: 'empty',
+        style: { marginTop: '10px', padding: '28px 22px', border: '1px dashed var(--line-2)', borderRadius: '10px' },
+      },
+      h('div', { style: { fontWeight: '600', marginBottom: '4px' } }, 'No matching tasks'),
+      h('div', { style: { color: 'var(--fg-2)' } }, 'Try clearing filters or create a new task.')));
+      return;
+    }
 
     const tbl = h('div', { class: 'list-wrap' },
       h('div', { class: 'list-header' },

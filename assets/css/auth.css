@@ -23,6 +23,13 @@ body.auth-body {
   font-size: 13.5px; transition: border-color 0.12s, box-shadow 0.12s;
 }
 .field input:focus { border-color: var(--acc-border); box-shadow: 0 0 0 3px var(--acc-soft); }
+.field-row { position: relative; }
+.field-row input { padding-right: 72px; }
+.toggle-pass {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-size: 12px; color: var(--fg-2); padding: 3px 7px; border-radius: 6px;
+}
+.toggle-pass:hover { background: var(--bg-4); color: var(--fg-0); }
 
 .auth-card .btn { width: 100%; justify-content: center; padding: 10px; margin-top: 8px; }
 .auth-foot { margin-top: 16px; text-align: center; font-size: 12.5px; color: var(--fg-3); }
