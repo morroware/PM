@@ -74,7 +74,7 @@ function renderTaskDetail(task, { onClose, onUpdate, onToggleSubtask, onAddSubta
     // Title
     if (editingTitle) {
       const ta = h('textarea', {
-        autofocus: true, value: tempTitle,
+        value: tempTitle,
         onInput: e => { tempTitle = e.target.value; },
         onBlur: () => save(),
         onKeydown: e => {
