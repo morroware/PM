@@ -76,7 +76,7 @@ if ($method === 'POST') {
         $me = pm_current_user();
         $who = $me['name'] ?? 'An admin';
         $ok = pm_slack_post($channel,
-            ":white_check_mark: {$who} sent a test message from the Project Manager.");
+            ":white_check_mark: {$who} sent a test message from Castle Tech Tasks.");
         if (!$ok) {
             $err = pm_slack_settings()['last_error'] ?? 'Unknown error';
             pm_error('Slack test failed: ' . $err, 502);
